@@ -8,6 +8,8 @@ config.d1_databases=[{binding:'DB',database_name:'opentonton',database_id:databa
 config.triggers={crons:['0 * * * *']};
 config.observability={enabled:false};
 config.workers_dev=true;
-config.limits={cpu_ms:10};
+// Custom CPU limits require the paid Standard usage model.
+// Workers Free applies its own fixed limits; do not opt into paid settings.
+delete config.limits;
 writeFileSync(file,JSON.stringify(config,null,2)+'\n');
 console.log('Standalone Cloudflare configuration prepared. Hourly expiry cleanup enabled.');
