@@ -1,4 +1,40 @@
 import type { Metadata } from 'next';
 import './globals.css';
-export const metadata:Metadata={title:'OpenTonton — みんなの都合を、ひとつに。',description:'メール登録不要。30分単位のタイムラインで、みんなが集まれる時間を見つける日程調整サービス。',robots:{index:false,follow:false},icons:{icon:'/favicon.svg'}};
-export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="ja"><body>{children}</body></html>;}
+
+const title = 'OpenTonton — みんなの都合を、ひとつに。';
+const description = 'メール登録不要。30分単位のタイムラインで、みんなが集まれる時間を見つける日程調整サービス。';
+const image = {
+  url: '/ogp.png',
+  width: 1200,
+  height: 630,
+  type: 'image/png',
+  alt: 'OpenTonton — みんなの都合を、ひとつに。',
+};
+
+export const metadata: Metadata = {
+  metadataBase: new URL('https://opentonton.altneuland.workers.dev'),
+  title,
+  description,
+  robots: { index: false, follow: false },
+  icons: { icon: '/favicon.svg' },
+  // Keep previews generic. Do not canonicalize event links to the homepage:
+  // the original ?event= link must remain the shared destination.
+  openGraph: {
+    type: 'website',
+    locale: 'ja_JP',
+    siteName: 'OpenTonton',
+    title,
+    description,
+    images: [image],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title,
+    description,
+    images: [{ url: image.url, alt: image.alt }],
+  },
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return <html lang="ja"><body>{children}</body></html>;
+}
