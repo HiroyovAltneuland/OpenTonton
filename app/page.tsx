@@ -1,4 +1,5 @@
 'use client';
+import { preparePasswordBody } from '../lib/password-client';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownUp, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Copy, Download, ExternalLink, Eye, Home, Info, Link2, LockKeyhole, LogOut, Menu, Plus, Settings2, ShieldCheck, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { expiration, jstDate, recommendations, timeLabel, type Availability, type Day, type EventData, type Member, type Snapshot } from '../lib/scheduling';
@@ -11,7 +12,8 @@ const demoSnapshot=():Snapshot=>{
  const members:Member[]=[{id:'owner',nickname:'tonton',role:'owner',availability:{},version:1},...names.map((nickname,i)=>({id:'m'+i,nickname,role:'participant' as const,version:1,availability:Object.fromEntries(days.map((d,j)=>[d.date,range(18,36).filter(s=>j===0?(s>=26&&s<30)||((s+i)%5!==0&&s>=20+i%3&&s<34-i%3):j===1?(s+i)%4!==0:s>=22&&s<32-i%3)]))}))];
  return {event:{id:'demo',title:'チームのアイデアミーティング',description:'次の一歩を、みんなで考える時間に。\n参加できる時間帯を教えてください。',dates:days,duration:60,createdAt:Date.now(),expiresAt:expiration(days,Date.now()),status:'open',confirmed:null,revision:1},members,me:null};
 };
-async function request(path:string,method='GET',body?:unknown){const r=await fetch('/api/events'+path,{method,headers:method==='GET'?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});const result:any=await r.json();if(!r.ok)throw new Error(result.error||'通信できませんでした。');return result;}
+async function sendRequest(path:string,method='GET',body?:unknown){const r=await fetch('/api/events'+path,{method,headers:method==='GET'?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});const result:any=await r.json();if(!r.ok)throw new Error(result.error||'通信できませんでした。');return result;}
+async function request(path:string,method='GET',body?:unknown){return sendRequest(path,method,await preparePasswordBody(path,method,body,sendRequest));}
 function Mark(){return <span className="brand-mark"><span/><span/><span/><span/></span>;}
 function Modal({title,subtitle,children,onClose,wide=false}:{title:string;subtitle?:string;children:ReactNode;onClose:()=>void;wide?:boolean}){
  const ref=useRef<HTMLDialogElement>(null);
