@@ -20,9 +20,9 @@ export function translateError(language: Language, message: string): string {
   if (code) return translate(language, '処理できませんでした。エラーコード：{0}', [code[1]]);
   return 'Unable to complete the operation. Please try again.';
 }
-export function formatDate(date: string, language: Language, options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric', weekday: 'short' }): string {
+export function formatDate(date: string, language: Language, options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric', weekday: 'short', year: 'numeric' }): string {
   return new Intl.DateTimeFormat(language === 'ja' ? 'ja-JP' : 'en-US', { ...options, ...(language === 'en' && options.month === 'numeric' ? { month: 'short' as const } : {}), timeZone: 'Asia/Tokyo' }).format(new Date(date + 'T12:00:00+09:00'));
 }
-export function formatStamp(value: number, language: Language): string {
-  return new Intl.DateTimeFormat(language === 'ja' ? 'ja-JP' : 'en-US', { year: 'numeric', month: language === 'ja' ? 'numeric' : 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Tokyo' }).format(value);
+export function formatStamp(value: number, language: Language, timeZone='Asia/Tokyo'): string {
+  return new Intl.DateTimeFormat(language === 'ja' ? 'ja-JP' : 'en-US', { year: 'numeric', month: language === 'ja' ? 'numeric' : 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone }).format(value);
 }

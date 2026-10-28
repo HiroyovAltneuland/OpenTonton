@@ -33,7 +33,7 @@ test('localized dates and expiry remain in Japan time across UTC midnight', () =
 });
 
 test('all explicit UI translation keys and fixed API/auth errors have English translations', () => {
-  for (const file of ['app/page.tsx', 'lib/server.ts', 'lib/edge-security.ts', 'lib/password-client.ts', 'lib/scheduling.ts']) {
+  for (const file of ['app/page.tsx', 'lib/server.ts', 'lib/edge-security.ts', 'lib/password-client.ts', 'lib/scheduling.ts', 'lib/time-zone.ts', 'lib/event-csv.ts']) {
     const source = ts.createSourceFile(file, readFileSync(new URL('../' + file, import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, file.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     function visit(node) {
       if (ts.isCallExpression(node) && node.expression.getText(source) === 't' && ts.isStringLiteral(node.arguments[0])) assert(Object.hasOwn(english, node.arguments[0].text), node.arguments[0].text);

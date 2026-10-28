@@ -1,0 +1,1 @@
+ALTER TABLE `events` ADD `time_zone` text DEFAULT 'Asia/Tokyo' NOT NULL;

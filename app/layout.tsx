@@ -22,15 +22,16 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'ja_JP',
+    alternateLocale: ['en_US'],
     siteName: 'OpenTonton',
-    title,
-    description,
+    title: 'OpenTonton — 日程調整 / Find a time together',
+    description: description + ' No email required. Find a time that works for everyone.',
     images: [image],
   },
   twitter: {
     card: 'summary_large_image',
-    title,
-    description,
+    title: 'OpenTonton — 日程調整 / Find a time together',
+    description: description + ' No email required. Find a time that works for everyone.',
     images: [{ url: image.url, alt: image.alt }],
   },
 };

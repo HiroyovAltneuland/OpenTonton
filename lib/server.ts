@@ -1,7 +1,8 @@
+import { canonicalTimeZone, slotInstant } from './time-zone';
 import { env } from 'cloudflare:workers';
 import { PASSWORD_SCHEME, PASSWORD_ITERATIONS, randomPasswordSalt, validPasswordProof } from './password-client';
 import { canonicalNickname, expiration, validateAvailability, validateDays, type EventData, type Member, type Snapshot } from './scheduling';
-const VERSION='2026-10-28-draft';
+const VERSION='2026-10-29-draft';
 const encoder=new TextEncoder();
 const db=()=>{if(!env.DB)throw new OperationError('OT_DB_NOT_CONFIGURED');return env.DB;};
 class OperationError extends Error { constructor(public code:string){super(code);} }
@@ -35,7 +36,7 @@ async function verifyPassword(value:unknown,stored:string) {
   if(!record||!validPasswordProof(value)||!same(value.salt,record.salt))return false;
   return same(await storedVerifier(value.verifier,record.salt,record.serverSalt),record.digest);
 }
-function parseEvent(row:any):EventData {return {id:row.id,title:row.title,description:row.description,dates:JSON.parse(row.dates),duration:row.duration,createdAt:row.created_at,expiresAt:row.expires_at,status:row.status,confirmed:row.confirmed,revision:row.revision};}
+function parseEvent(row:any):EventData {return {id:row.id,timeZone:row.time_zone||'Asia/Tokyo',title:row.title,description:row.description,dates:JSON.parse(row.dates),duration:row.duration,createdAt:row.created_at,expiresAt:row.expires_at,status:row.status,confirmed:row.confirmed,revision:row.revision};}
 function parseMember(row:any):Member{return {id:row.id,nickname:row.nickname,role:row.role,availability:JSON.parse(row.availability),version:row.version};}
 const cookieName=(eventId:string)=>`ot_${eventId}`;
 const cookie=(request:Request,eventId:string,token:string,expires:number)=>`${cookieName(eventId)}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0,Math.floor((expires-Date.now())/1000))}${new URL(request.url).protocol==='https:'?'; Secure':''}`;
@@ -123,8 +124,9 @@ export async function api(request:Request):Promise<Response>{
       await creationQuota(request);
       const total=await db().prepare('SELECT COUNT(*) AS n FROM events').first<{n:number}>();if((total?.n||0)>=5000)fail(503,'現在、新規作成を受け付けていません。');
       const data=await body(request);agree(data);const now=Date.now();
-      const days=validateDays(data.dates,now);const eventId=id();const memberId=id();const nickname=canonicalNickname(data.nickname);const recovery=id();
-      const event:EventData={id:eventId,title:text(data.title,80,true),description:text(data.description,500),dates:days,duration:duration(data.duration),createdAt:now,expiresAt:expiration(days,now),status:'open',confirmed:null,revision:1};
+      const timeZone=canonicalTimeZone(data.timeZone);
+      const days=validateDays(data.dates,now,now,timeZone).map(d=>({...d,startAt:slotInstant(d.date,0,timeZone)}));const eventId=id();const memberId=id();const nickname=canonicalNickname(data.nickname);const recovery=id();
+      const event:EventData={id:eventId,timeZone,title:text(data.title,80,true),description:text(data.description,500),dates:days,duration:duration(data.duration),createdAt:now,expiresAt:expiration(days,now,timeZone),status:'open',confirmed:null,revision:1};
       if(!days.some(d=>d.slots.some(start=>Array.from({length:event.duration/30},(_,i)=>start+i).every(s=>d.slots.includes(s)))))fail(400,'開催時間を満たす連続した候補時間帯を設定してください。');
       const pass=await passwordHash(data.password);
       // Recompute the hourly bucket after hashing, then enforce it inside the
@@ -133,7 +135,7 @@ export async function api(request:Request):Promise<Response>{
       const quota=await creationQuota(request);
       const token=id()+id();const sessionExpires=Math.min(Date.now()+7*86400000,event.expiresAt);
       const result=await db().batch([
-        db().prepare('INSERT INTO events(id,title,description,dates,duration,created_at,expires_at,status,revision,terms_version) SELECT ?,?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT count FROM rate_limits WHERE key=?),0)<20').bind(eventId,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION,quota.key),
+        db().prepare('INSERT INTO events(id,time_zone,title,description,dates,duration,created_at,expires_at,status,revision,terms_version) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT count FROM rate_limits WHERE key=?),0)<20').bind(eventId,timeZone,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION,quota.key),
         db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(memberId,eventId,nickname,'owner',pass,await hash(recovery),'{}',1,now,now,eventId),
         db().prepare('INSERT INTO sessions(token,member_id,expires_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(await hash(token),memberId,sessionExpires,eventId),
         db().prepare('INSERT INTO rate_limits(key,count,expires_at) SELECT ?,1,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?) ON CONFLICT(key) DO UPDATE SET count=count+1').bind(quota.key,quota.expires,eventId),
@@ -225,7 +227,7 @@ export async function api(request:Request):Promise<Response>{
       const result=await db().prepare('DELETE FROM events WHERE id=? AND EXISTS(SELECT 1 FROM members WHERE id=? AND auth_version=?)').bind(eventId,me.id,me.auth_version).run();if(!result.meta.changes)fail(409,'認証情報が変更されました。再度ログインしてください。');return json({ok:true},200,{'Set-Cookie':cookie(request,eventId,'',0)});
     }
     if(parts.length===2&&method==='PATCH'){
-      const data=await body(request);const title=text(data.title,80,true),description=text(data.description,500);const state=data.status;
+      const data=await body(request);if(Object.hasOwn(data,'timeZone')&&data.timeZone!==event.timeZone)fail(400,'候補のタイムゾーンは作成後に変更できません。');const title=text(data.title,80,true),description=text(data.description,500);const state=data.status;
       if(!['open','closed','confirmed'].includes(state))fail(400,'受付状態を確認してください。');
       let confirmed:string|null=null;
       if(state==='confirmed'){
