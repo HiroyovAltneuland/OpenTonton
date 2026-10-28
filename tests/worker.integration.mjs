@@ -3,14 +3,21 @@ import {readFileSync,readdirSync} from 'node:fs';
 import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import { preparePasswordBody, stretchPassword, PASSWORD_SCHEME } from '../lib/password-client.ts';
+import { RATE_LIMIT_BINDINGS } from '../lib/edge-rate-config.mjs';
 import { pbkdf2Sync } from 'node:crypto';
 const require=createRequire(import.meta.url);
-const {Miniflare}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
-const mf=new Miniflare({modules:[{type:'ESModule',path:resolve('dist/server/auth-test-entry.js'),contents:"import worker from './index.js'; crypto.subtle.deriveBits=async()=>{throw new Error('PBKDF2 must run on the client, never in a Worker');}; export default worker;"},{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB']});
+const {Miniflare,convertV4MiniflareOptions}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
+const mf=new Miniflare(convertV4MiniflareOptions({
+ name:'integration',
+ modules:[{type:'ESModule',path:resolve('dist/server/auth-test-entry.js'),contents:"import worker from './index.js'; crypto.subtle.deriveBits=async()=>{throw new Error('PBKDF2 must run on the client, never in a Worker');}; export default worker;"},
+ {type:'ESModule',path:resolve('dist/server/index.js')},
+ ...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],
+ modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],
+ ratelimits:Object.fromEntries(RATE_LIMIT_BINDINGS.map(({name,namespace_id,simple})=>[name,{namespace_id,simple:{...simple,limit:name==='CREATE_LIMIT'?10:10000}}])),
+}));
 try {
  const database=await mf.getD1Database('DB');
- const sql=readFileSync('drizzle/0000_yielding_scream.sql','utf8');
- for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await database.prepare(statement).run();
+ for(const migration of readdirSync('drizzle').filter(p=>p.endsWith('.sql')).sort())for(const statement of readFileSync('drizzle/'+migration,'utf8').split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await database.prepare(statement).run();
  const base='http://localhost';
  let ownerCookie='',participantCookie='';
  async function callRaw(path,method='GET',body,cookie='',origin=base,address='192.0.2.10'){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,'CF-Connecting-IP':address,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,retryAfter:r.headers.get('retry-after'),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
