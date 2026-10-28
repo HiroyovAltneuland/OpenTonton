@@ -4,7 +4,7 @@ const VERSION='2026-10-28-draft';
 const encoder=new TextEncoder();
 const db=()=>{if(!env.DB)throw new OperationError('OT_DB_NOT_CONFIGURED');return env.DB;};
 class OperationError extends Error { constructor(public code:string){super(code);} }
-class HttpError extends Error { constructor(public status:number,message:string){super(message);} }
+class HttpError extends Error { constructor(public status:number,message:string,public headers:Record<string,string>={}){super(message);} }
 const fail=(status:number,message:string):never=>{throw new HttpError(status,message);};
 const id=()=>crypto.randomUUID().replaceAll('-','');
 const hash=async(value:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value)))).map(x=>x.toString(16).padStart(2,'0')).join('');
@@ -41,12 +41,25 @@ async function issueSession(request:Request,event:EventData,memberId:string){
   await db().prepare('INSERT INTO sessions(token,member_id,expires_at) VALUES(?,?,?)').bind(await hash(token),memberId,expires).run();
   return cookie(request,event.id,token,expires);
 }
-async function limit(request:Request,scope:string,max:number,window:number){
+async function rateBucket(request:Request,scope:string,window:number){
   const now=Date.now();const bucket=Math.floor(now/window);const address=request.headers.get('cf-connecting-ip')||'local';
   // Short-lived one-way bucket identifiers; never store the raw address.
-  const key=await hash(`${scope}:${address}:${bucket}`);
-  const row=await db().prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(key,(bucket+1)*window).first<{count:number}>();
-  if((row?.count||0)>max)fail(429,'操作が多くなっています。少し時間をおいてからお試しください。');
+  return {key:await hash(`${scope}:${address}:${bucket}`),expires:(bucket+1)*window};
+}
+function rateExceeded(expires:number,message:string):never {
+  throw new HttpError(429,message,{'Retry-After':String(Math.max(1,Math.ceil((expires-Date.now())/1000)))});
+}
+async function limit(request:Request,scope:string,max:number,window:number,message='操作が多くなっています。少し時間をおいてからお試しください。'){
+  const {key,expires}=await rateBucket(request,scope,window);
+  const row=await db().prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(key,expires).first<{count:number}>();
+  if((row?.count||0)>max)rateExceeded(expires,message);
+}
+const creationLimitMessage='この接続元からの作成件数が1時間の上限（20件）に達しました。次の毎時00分以降にお試しください。';
+async function creationQuota(request:Request){
+  const quota=await rateBucket(request,'create-success',3600000);
+  const row=await db().prepare('SELECT count FROM rate_limits WHERE key=?').bind(quota.key).first<{count:number}>();
+  if((row?.count||0)>=20)rateExceeded(quota.expires,creationLimitMessage);
+  return quota;
 }
 export async function cleanup(database:D1Database,now=Date.now()) {
   // Bounded batches prevent cleanup itself consuming an unbounded request budget.
@@ -79,23 +92,33 @@ export async function api(request:Request):Promise<Response>{
       if(request.headers.get('origin')!==url.origin)fail(403,'同じサイトから操作してください。');
       if(!(request.headers.get('content-type')||'').includes('application/json'))fail(415,'JSON形式で送信してください。');
       if(Number(request.headers.get('content-length')||0)>64000)fail(413,'入力内容が大きすぎます。');
-      await limit(request,'write',180,3600000);
+      const creating=parts[0]==='events'&&parts.length===1&&method==='POST';
+      if(creating)await limit(request,'create-attempt',10,60000,'作成リクエストが1分間の上限（10回）に達しました。次の分になってからお試しください。');
+      else await limit(request,'write',180,3600000);
       await cleanup(db());
     }
     if(parts[0]!=='events')fail(404,'ページが見つかりません。');
     if(parts.length===1&&method==='POST'){
-      await limit(request,'create',5,3600000);
+      await creationQuota(request);
       const total=await db().prepare('SELECT COUNT(*) AS n FROM events').first<{n:number}>();if((total?.n||0)>=5000)fail(503,'現在、新規作成を受け付けていません。');
       const data=await body(request);agree(data);const now=Date.now();
       const days=validateDays(data.dates,now);const eventId=id();const memberId=id();const nickname=canonicalNickname(data.nickname);const recovery=id();
       const event:EventData={id:eventId,title:text(data.title,80,true),description:text(data.description,500),dates:days,duration:duration(data.duration),createdAt:now,expiresAt:expiration(days,now),status:'open',confirmed:null,revision:1};
       if(!days.some(d=>d.slots.some(start=>Array.from({length:event.duration/30},(_,i)=>start+i).every(s=>d.slots.includes(s)))))fail(400,'開催時間を満たす連続した候補時間帯を設定してください。');
       const pass=await passwordHash(data.password);
-      await db().batch([
-        db().prepare('INSERT INTO events(id,title,description,dates,duration,created_at,expires_at,status,revision,terms_version) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(eventId,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION),
-        db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(memberId,eventId,nickname,'owner',pass,await hash(recovery),'{}',1,now,now)
+      // Recompute the hourly bucket after hashing, then enforce it inside the
+      // same transaction as the event, owner and session. Failures roll back
+      // everything; concurrent creates cannot exceed 20 successful commits.
+      const quota=await creationQuota(request);
+      const token=id()+id();const sessionExpires=Math.min(Date.now()+7*86400000,event.expiresAt);
+      const result=await db().batch([
+        db().prepare('INSERT INTO events(id,title,description,dates,duration,created_at,expires_at,status,revision,terms_version) SELECT ?,?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT count FROM rate_limits WHERE key=?),0)<20').bind(eventId,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION,quota.key),
+        db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(memberId,eventId,nickname,'owner',pass,await hash(recovery),'{}',1,now,now,eventId),
+        db().prepare('INSERT INTO sessions(token,member_id,expires_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(await hash(token),memberId,sessionExpires,eventId),
+        db().prepare('INSERT INTO rate_limits(key,count,expires_at) SELECT ?,1,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?) ON CONFLICT(key) DO UPDATE SET count=count+1').bind(quota.key,quota.expires,eventId),
       ]);
-      return json({id:eventId,recovery},201,{'Set-Cookie':await issueSession(request,event,memberId)});
+      if(!result[0].meta.changes)rateExceeded(quota.expires,creationLimitMessage);
+      return json({id:eventId,recovery},201,{'Set-Cookie':cookie(request,event.id,token,sessionExpires)});
     }
     const eventId=parts[1];const event=await activeEvent(eventId);const action=parts[2];
     if(parts.length===2&&method==='GET')return json(await snapshot(request,event));
@@ -172,7 +195,7 @@ export async function api(request:Request):Promise<Response>{
     }
     return fail(404,'操作が見つかりません。');
   }catch(error){
-    if(error instanceof HttpError)return json({error:error.message},error.status);
+    if(error instanceof HttpError)return json({error:error.message},error.status,error.headers);
     if(error instanceof Error&&/^(候補|回答|ニックネーム)/.test(error.message))return json({error:error.message},400);
     // Fixed diagnostic codes remain available with observability disabled. Never
     // return or log raw exceptions, request bodies, IP addresses, or credentials.
