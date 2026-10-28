@@ -21,7 +21,14 @@ export function makeClock(eventZone=DEFAULT_TIME_ZONE, displayZone=eventZone, da
       const a=point(day.date,Math.min(...day.slots)),b=point(day.date,Math.max(...day.slots)+1)-1;
       return dateFormat.format(a)+(zonedParts(a,displayZone).date===zonedParts(b,displayZone).date?'':' – '+dateFormat.format(b));
     },
-    range:(date:string,start:number,end:number)=>full(date,start)+' – '+full(date,end),
+    range:(date:string,start:number,end:number)=>{
+      const a=point(date,start),b=point(date,end);
+      const ap=zonedParts(a,displayZone),bp=zonedParts(b,displayZone);
+      const ao=offsetLabel(a,displayZone),bo=offsetLabel(b,displayZone);
+      if(ao!==bo)return full(date,start)+' – '+full(date,end);
+      const endDate=ap.date===bp.date?'':(ap.year===bp.year?shortDate:dateFormat).format(b)+' ';
+      return `${dateFormat.format(a)} ${ap.time}–${endDate}${bp.time} (${ao})`;
+    },
     stamp:(at:number)=>`${formatStamp(at,language,displayZone)} ${offsetLabel(at,displayZone)} · ${displayZone}`,
   };
 }

@@ -39,3 +39,14 @@ test('stored anchors survive projection; CSV exports event, local and UTC instan
  assert.match(csv,/Start \(UTC\)/);assert.match(csv,/2026-10-29T09:00:00\+05:45/);assert.match(csv,/2026-10-28T20:15:00-07:00/);assert.match(csv,/2026-10-29T03:15:00.000Z/);assert(csv.includes('"\'=1+1"'));
  assert.equal(zonedIso(Date.parse('2026-10-29T03:15:00Z'),'Asia/Kathmandu'),'2026-10-29T09:00:00+05:45');
 });
+test('ranges share dates and offsets, preserving cross-year and clock-change distinctions',()=>{
+ const ja=makeClock('Asia/Tokyo','Asia/Tokyo',[],'ja');
+ assert.equal(ja.range('2026-10-30',18,36),'2026年10月30日(金) 09:00–18:00 (UTC+09:00)');
+ assert.equal(ja.range('2026-10-30',46,48),'2026年10月30日(金) 23:00–10月31日(土) 00:00 (UTC+09:00)');
+ assert.equal(ja.range('2026-12-31',46,48),'2026年12月31日(木) 23:00–2027年1月1日(金) 00:00 (UTC+09:00)');
+ const en=makeClock('Asia/Tokyo','America/New_York',[],'en');
+ assert.equal(en.range('2026-10-30',18,36),'Thu, Oct 29, 2026 20:00–Fri, Oct 30 05:00 (UTC-04:00)');
+ assert.equal(en.range('2026-11-01',29,31),'Sun, Nov 1, 2026 01:30 UTC-04:00 – Sun, Nov 1, 2026 01:30 UTC-05:00');
+ const nepal=makeClock('Asia/Tokyo','Asia/Kathmandu',[],'en');
+ assert.equal(nepal.range('2026-10-30',18,20),'Fri, Oct 30, 2026 05:45–06:45 (UTC+05:45)');
+});
