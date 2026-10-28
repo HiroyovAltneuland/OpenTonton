@@ -1,5 +1,7 @@
 # OpenTonton
 
+**公開サービス： [OpenTontonを開く](https://opentonton.altneuland.workers.dev/)**
+
 **みんなの都合を、ひとつに。** メールアドレスを登録せずに使える、30分単位の日程調整サービス。
 
 ## 実装済み
