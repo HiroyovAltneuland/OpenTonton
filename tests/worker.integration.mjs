@@ -1,0 +1,34 @@
+import {createRequire} from 'node:module';
+import {readFileSync,readdirSync} from 'node:fs';
+import {resolve} from 'node:path';
+import assert from 'node:assert/strict';
+const require=createRequire(import.meta.url);
+const {Miniflare}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
+const mf=new Miniflare({modules:[{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB']});
+try {
+ const database=await mf.getD1Database('DB');
+ const sql=readFileSync('drizzle/0000_yielding_scream.sql','utf8');
+ for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await database.prepare(statement).run();
+ const base='http://localhost';
+ let ownerCookie='',participantCookie='';
+ async function call(path,method='GET',body,cookie='',origin=base){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ const day=new Date(Date.now()+9*3600000+86400000).toISOString().slice(0,10);
+ const payload={title:'Test-only event',description:'Synthetic test content',nickname:'test-owner',password:'test-only-opentonton-5829',duration:60,dates:[{date:day,slots:[18,19,20,21]}],agreed:true};
+ const created=await call('','POST',payload);assert.equal(created.status,201,JSON.stringify(created));const id=created.data.id;ownerCookie=created.cookie;assert(created.data.recovery);console.log('PASS create event with hashed password');
+ const initial=await call('/'+id);assert.equal(initial.data.me,null);assert.equal(initial.data.members.length,1);assert(!JSON.stringify(initial.data).includes('recovery'));assert(!JSON.stringify(initial.data).includes('password'));assert.equal((await call('/'+id,'GET',undefined,ownerCookie)).data.me.role,'owner');console.log('PASS public payload omits secrets and session identifies owner');
+ assert.equal((await call('/'+id,'PATCH',{title:'bad'},'',base)).status,401);assert.equal((await call('/'+id+'/login','POST',{nickname:'test-owner',password:'incorrect-password'})).status,401);assert.equal((await call('/'+id+'/login','POST',payload,'','https://evil.example')).status,403);console.log('PASS wrong password, unauthorized edit and cross-origin write rejected');
+ const joined=await call('/'+id+'/join','POST',{nickname:'test-participant',password:'test-only-participant-6381',availability:{[day]:[18,19]},revision:1,agreed:true});assert.equal(joined.status,201,JSON.stringify(joined));participantCookie=joined.cookie;console.log('PASS participant registration');
+ const participant=await call('/'+id,'GET',undefined,participantCookie);const pid=participant.data.me.id;
+ assert.equal((await call('/'+id+'/answer','PATCH',{availability:{[day]:[22]},version:1,revision:1},participantCookie)).status,400);
+ assert.equal((await call('/'+id+'/answer','PATCH',{availability:{[day]:[20,21]},version:1,revision:1},participantCookie)).status,200);
+ assert.equal((await call('/'+id+'/answer','PATCH',{availability:{[day]:[18]},version:1,revision:1},participantCookie)).status,409);
+ console.log('PASS outside slots rejected, own answer saved, stale write rejected');
+ assert.equal((await call('/'+id,'PATCH',{title:'unauthorized',description:'',status:'closed',revision:1},participantCookie)).status,403);
+ assert.equal((await call('/'+id,'PATCH',{title:payload.title,description:'',status:'confirmed',confirmed:day+'@18',revision:1},ownerCookie)).status,200);
+ assert.equal((await call('/'+id+'/answer','PATCH',{availability:{[day]:[18]},version:2,revision:2},participantCookie)).status,409);console.log('PASS owner confirmation closes participant writes');
+ const recovered=await call('/'+id+'/recover','POST',{nickname:'test-participant',password:'test-only-new-password-7438',recovery:joined.data.recovery});assert.equal(recovered.status,200);assert(recovered.data.recovery);assert.equal((await call('/'+id,'GET',undefined,participantCookie)).data.me,null);console.log('PASS recovery rotates code and invalidates old sessions');
+ // Force expiry only in this isolated test database.
+ await database.prepare('UPDATE events SET expires_at=? WHERE id=?').bind(Date.now()-1000,id).run();
+ const expired=await call('/'+id);assert([404,410].includes(expired.status));assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM members WHERE event_id=?').bind(id).first()).n,0);assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n,0);console.log('PASS expiry blocks reads and cascades removal of answers and credentials');
+ const raw=await database.prepare('SELECT COUNT(*) AS n FROM events').first();assert.equal(raw.n,0);console.log('All integration checks passed.');
+} finally { await mf.dispose(); }
