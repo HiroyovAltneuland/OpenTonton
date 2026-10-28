@@ -2,19 +2,55 @@ import {createRequire} from 'node:module';
 import {readFileSync,readdirSync} from 'node:fs';
 import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
+import { preparePasswordBody, stretchPassword, PASSWORD_SCHEME } from '../lib/password-client.ts';
+import { pbkdf2Sync } from 'node:crypto';
 const require=createRequire(import.meta.url);
 const {Miniflare}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
-const mf=new Miniflare({modules:[{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB']});
+const mf=new Miniflare({modules:[{type:'ESModule',path:resolve('dist/server/auth-test-entry.js'),contents:"import worker from './index.js'; crypto.subtle.deriveBits=async()=>{throw new Error('PBKDF2 must run on the client, never in a Worker');}; export default worker;"},{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB']});
 try {
  const database=await mf.getD1Database('DB');
  const sql=readFileSync('drizzle/0000_yielding_scream.sql','utf8');
  for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await database.prepare(statement).run();
  const base='http://localhost';
  let ownerCookie='',participantCookie='';
- async function call(path,method='GET',body,cookie='',origin=base,address='192.0.2.10'){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,'CF-Connecting-IP':address,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,retryAfter:r.headers.get('retry-after'),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ async function callRaw(path,method='GET',body,cookie='',origin=base,address='192.0.2.10'){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,'CF-Connecting-IP':address,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,retryAfter:r.headers.get('retry-after'),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ const preparedBodies=[];
+ async function call(path,method='GET',body,cookie='',origin=base,address='192.0.2.10'){
+   const prepared=origin===base?await preparePasswordBody(path,method,body,async (p,m,b)=>{
+     const result=await callRaw(p,m,b,cookie,origin,address);
+     if(result.status>=400)throw new Error(result.data.error);
+     return result.data;
+   }):body;
+   preparedBodies.push(prepared);
+   return callRaw(path,method,prepared,cookie,origin,address);
+ }
  const day=new Date(Date.now()+9*3600000+86400000).toISOString().slice(0,10);
  const payload={title:'Test-only event',description:'Synthetic test content',nickname:'test-owner',password:'test-only-opentonton-5829',duration:60,dates:[{date:day,slots:[18,19,20,21]}],agreed:true};
  const created=await call('','POST',payload);assert.equal(created.status,201,JSON.stringify(created));const id=created.data.id;ownerCookie=created.cookie;assert(created.data.recovery);console.log('PASS create event with hashed password');
+ const sentProof=preparedBodies.at(-1).password;
+ assert.equal(sentProof.scheme,PASSWORD_SCHEME);
+ assert.equal(sentProof.verifier,pbkdf2Sync(payload.password,`OpenTonton credential v1:${sentProof.salt}`,600000,32,'sha256').toString('hex'));
+ const stored=(await database.prepare('SELECT password FROM members WHERE event_id=?').bind(id).first()).password;
+ assert(stored.startsWith(PASSWORD_SCHEME+'$600000$'));
+ assert(!stored.includes(payload.password));assert(!stored.includes(sentProof.verifier));
+ const params=await callRaw('/'+id+'/credentials','POST',{nickname:payload.nickname});
+ assert.deepEqual(Object.keys(params.data).sort(),['salt','scheme']);assert.equal(params.data.salt,sentProof.salt);
+ const unknown=await callRaw('/'+id+'/credentials','POST',{nickname:'missing-user'});
+ assert.equal(unknown.status,200);assert.deepEqual(Object.keys(unknown.data).sort(),['salt','scheme']);
+ assert.equal((await call('/'+id+'/login','POST',{nickname:'missing-user',password:payload.password})).status,401);
+ assert.equal((await callRaw('/'+id+'/login','POST',{nickname:payload.nickname,password:{...sentProof,verifier:stored.split('$')[4]}})).status,401);
+ assert.equal((await call('/'+id+'/login','POST',{nickname:payload.nickname,password:payload.password})).status,200);
+ assert.equal((await callRaw('','POST',payload)).status,409);
+ assert.equal((await callRaw('','POST',{...payload,password:{...sentProof,salt:'bad'}})).status,400);
+ await assert.rejects(stretchPassword('short'),/10〜128/);
+ const renamed='renamed-owner',newPassword='test-only-updated-owner-8520';
+ const changed=await call('/'+id+'/profile','PATCH',{nickname:renamed,currentPassword:payload.password,password:newPassword},ownerCookie);
+ assert.equal(changed.status,200);assert.equal((await call('/'+id,'GET',undefined,ownerCookie)).data.me,null);ownerCookie=changed.cookie;
+ assert.equal((await call('/'+id+'/login','POST',{nickname:renamed,password:payload.password})).status,401);
+ assert.equal((await call('/'+id+'/login','POST',{nickname:renamed,password:newPassword})).status,200);
+ const nameOnly=await call('/'+id+'/profile','PATCH',{nickname:payload.nickname,currentPassword:newPassword,password:''},ownerCookie);
+ assert.equal(nameOnly.status,200);ownerCookie=nameOnly.cookie;
+ console.log('PASS 600k client KDF, salted server digest, parameter privacy, malformed/old clients, rename and password change');
  const initial=await call('/'+id);assert.equal(initial.data.me,null);assert.equal(initial.data.members.length,1);assert(!JSON.stringify(initial.data).includes('recovery'));assert(!JSON.stringify(initial.data).includes('password'));assert.equal((await call('/'+id,'GET',undefined,ownerCookie)).data.me.role,'owner');console.log('PASS public payload omits secrets and session identifies owner');
  assert.equal((await call('/'+id,'PATCH',{title:'bad'},'',base)).status,401);assert.equal((await call('/'+id+'/login','POST',{nickname:'test-owner',password:'incorrect-password'})).status,401);assert.equal((await call('/'+id+'/login','POST',payload,'','https://evil.example')).status,403);console.log('PASS wrong password, unauthorized edit and cross-origin write rejected');
  const joined=await call('/'+id+'/join','POST',{nickname:'test-participant',password:'test-only-participant-6381',availability:{[day]:[18,19]},revision:1,agreed:true});assert.equal(joined.status,201,JSON.stringify(joined));participantCookie=joined.cookie;console.log('PASS participant registration');
@@ -27,6 +63,15 @@ try {
  assert.equal((await call('/'+id,'PATCH',{title:payload.title,description:'',status:'confirmed',confirmed:day+'@18',revision:1},ownerCookie)).status,200);
  assert.equal((await call('/'+id+'/answer','PATCH',{availability:{[day]:[18]},version:2,revision:2},participantCookie)).status,409);console.log('PASS owner confirmation closes participant writes');
  const recovered=await call('/'+id+'/recover','POST',{nickname:'test-participant',password:'test-only-new-password-7438',recovery:joined.data.recovery});assert.equal(recovered.status,200);assert(recovered.data.recovery);assert.equal((await call('/'+id,'GET',undefined,participantCookie)).data.me,null);console.log('PASS recovery rotates code and invalidates old sessions');
+ assert.equal((await call('/'+id+'/login','POST',{nickname:'test-participant',password:'test-only-participant-6381'})).status,401);
+ assert.equal((await call('/'+id+'/login','POST',{nickname:'test-participant',password:'test-only-new-password-7438'})).status,200);
+ // Existing legacy rows are preserved and can be upgraded with their recovery
+ // code. Never accept a leaked old DB digest as a login proof.
+ await database.prepare('UPDATE members SET password=? WHERE id=?').bind('pbkdf2-sha256$600000$'+'a'.repeat(32)+'$'+'b'.repeat(64),pid).run();
+ await assert.rejects(call('/'+id+'/login','POST',{nickname:'test-participant',password:'test-only-new-password-7438'}),/復旧コード/);
+ const migrated=await call('/'+id+'/recover','POST',{nickname:'test-participant',password:'test-only-migrated-9561',recovery:recovered.data.recovery});
+ assert.equal(migrated.status,200);assert.equal((await call('/'+id+'/login','POST',{nickname:'test-participant',password:'test-only-migrated-9561'})).status,200);
+ console.log('PASS recovered passwords verify, old passwords fail, legacy recovery upgrades without server PBKDF2');
  // Force expiry only in this isolated test database.
  await database.prepare('UPDATE events SET expires_at=? WHERE id=?').bind(Date.now()-1000,id).run();
  const expired=await call('/'+id);assert([404,410].includes(expired.status));assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM members WHERE event_id=?').bind(id).first()).n,0);assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n,0);console.log('PASS expiry blocks reads and cascades removal of answers and credentials');
@@ -70,5 +115,8 @@ try {
  assert.equal((await call('','POST',payload,'',base,concurrentIP)).status,201);
  const keys=await database.prepare('SELECT key FROM rate_limits').all();assert(keys.results.every(r=>/^[a-f0-9]{64}$/.test(r.key)));
  console.log('PASS expired quotas are cleaned up; raw IP addresses are not stored');
- console.log('All integration checks passed.');
+ assert.equal((await call('/'+retried.data.id,'DELETE',{password:'incorrect-password'},retried.cookie)).status,401);
+ assert.equal((await call('/'+retried.data.id,'DELETE',{password:payload.password},retried.cookie)).status,200);
+ console.log('PASS password-confirmed event deletion uses client stretching');
+ console.log('All integration checks passed with Worker PBKDF2 disabled.');
 } finally { await mf.dispose(); }
