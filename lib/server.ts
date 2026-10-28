@@ -43,12 +43,18 @@ const json=(body:unknown,status=200,headers:Record<string,string>={})=>Response.
 async function session(request:Request,eventId:string){
   const token=request.headers.get('cookie')?.split(';').map(x=>x.trim()).find(x=>x.startsWith(cookieName(eventId)+'='))?.split('=')[1];
   if(!token||!/^[a-f0-9]{64}$/.test(token))return null;
-  return await db().prepare('SELECT m.* FROM sessions s JOIN members m ON m.id=s.member_id WHERE s.token=? AND s.expires_at>? AND m.event_id=?').bind(await hash(token),Date.now(),eventId).first<any>();
+  return await db().prepare('SELECT m.* FROM sessions s JOIN members m ON m.id=s.member_id WHERE s.token=? AND s.expires_at>? AND m.event_id=? AND s.auth_version=m.auth_version').bind(await hash(token),Date.now(),eventId).first<any>();
 }
-async function issueSession(request:Request,event:EventData,memberId:string){
+async function sessionGrant(request:Request,event:EventData,memberId:string,authVersion:string){
   const token=id()+id();const expires=Math.min(Date.now()+7*86400000,event.expiresAt);
-  await db().prepare('INSERT INTO sessions(token,member_id,expires_at) VALUES(?,?,?)').bind(await hash(token),memberId,expires).run();
-  return cookie(request,event.id,token,expires);
+  const statement=db().prepare('INSERT INTO sessions(token,member_id,expires_at,auth_version) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM members m JOIN events e ON e.id=m.event_id WHERE m.id=? AND m.event_id=? AND m.auth_version=? AND e.expires_at>?)').bind(await hash(token),memberId,expires,authVersion,memberId,event.id,authVersion,Date.now());
+  return {statement,cookie:cookie(request,event.id,token,expires)};
+}
+async function issueSession(request:Request,event:EventData,member:{id:string;auth_version:string}){
+  const grant=await sessionGrant(request,event,member.id,member.auth_version);
+  const result=await grant.statement.run();
+  if(!result.meta.changes)fail(409,'認証情報が変更されました。再度ログインしてください。');
+  return grant.cookie;
 }
 async function rateBucket(request:Request,scope:string,window:number){
   const now=Date.now();const bucket=Math.floor(now/window);const address=request.headers.get('cf-connecting-ip')||'local';
@@ -60,8 +66,8 @@ function rateExceeded(expires:number,message:string):never {
 }
 async function limit(request:Request,scope:string,max:number,window:number,message='操作が多くなっています。少し時間をおいてからお試しください。'){
   const {key,expires}=await rateBucket(request,scope,window);
-  const row=await db().prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(key,expires).first<{count:number}>();
-  if((row?.count||0)>max)rateExceeded(expires,message);
+  const row=await db().prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 WHERE count<? RETURNING count').bind(key,expires,max).first<{count:number}>();
+  if(!row)rateExceeded(expires,message);
 }
 const creationLimitMessage='この接続元からの作成件数が1時間の上限（20件）に達しました。次の毎時00分以降にお試しください。';
 async function creationQuota(request:Request){
@@ -92,7 +98,13 @@ async function snapshot(request:Request,event:EventData):Promise<Snapshot>{
 }
 function text(value:unknown,max:number,required=false){if(typeof value!=='string'||value.length>max||(required&&!value.trim()))fail(400,`入力内容を確認してください（最大${max}文字）。`);return (value as string).trim();}
 const duration=(value:unknown)=>{if(![30,60,90,120].includes(value as number))fail(400,'開催時間を選択してください。');return value as number;};
-async function body(request:Request){const raw=await request.text();if(encoder.encode(raw).length>64000)fail(413,'入力内容が大きすぎます。');try{const value=JSON.parse(raw);if(!value||typeof value!=='object'||Array.isArray(value))fail(400,'入力形式を確認してください。');return value;}catch{fail(400,'入力形式を確認してください。');}}
+async function body(request:Request){
+  const reader=request.body?.getReader();if(!reader)return fail(400,'入力形式を確認してください。');
+  const chunks:Uint8Array[]=[];let size=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>64000){await reader.cancel();fail(413,'入力内容が大きすぎます。');}chunks.push(value);}}finally{reader.releaseLock();}
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(!value||typeof value!=='object'||Array.isArray(value))fail(400,'入力形式を確認してください。');return value;}catch{fail(400,'入力形式を確認してください。');}
+}
 const agree=(data:any)=>{if(data.agreed!==true)fail(400,'利用条件と削除期限への同意が必要です。');};
 export async function api(request:Request):Promise<Response>{
   try{
@@ -102,8 +114,8 @@ export async function api(request:Request):Promise<Response>{
       if(!(request.headers.get('content-type')||'').includes('application/json'))fail(415,'JSON形式で送信してください。');
       if(Number(request.headers.get('content-length')||0)>64000)fail(413,'入力内容が大きすぎます。');
       const creating=parts[0]==='events'&&parts.length===1&&method==='POST';
-      if(creating)await limit(request,'create-attempt',10,60000,'作成リクエストが1分間の上限（10回）に達しました。次の分になってからお試しください。');
-      else await limit(request,'write',180,3600000);
+      // Short-window admission is handled before D1 in the Worker.
+      if(!creating)await limit(request,'write',180,3600000);
       await cleanup(db());
     }
     if(parts[0]!=='events')fail(404,'ページが見つかりません。');
@@ -146,15 +158,21 @@ export async function api(request:Request):Promise<Response>{
       await limit(request,`login:${eventId}`,12,900000);const data=await body(request);const nickname=canonicalNickname(data.nickname);
       const member=await db().prepare('SELECT * FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first<any>();
       if(!member||!await verifyPassword(data.password,member.password))fail(401,'ニックネームまたはパスワードを確認してください。');
-      return json({ok:true},200,{'Set-Cookie':await issueSession(request,event,member.id)});
+      return json({ok:true},200,{'Set-Cookie':await issueSession(request,event,member)});
     }
     if(action==='recover'&&method==='POST'){
       await limit(request,`login:${eventId}`,12,900000);const data=await body(request);const nickname=canonicalNickname(data.nickname);
       const member=await db().prepare('SELECT * FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first<any>();
       if(!member||typeof data.recovery!=='string'||!same(await hash(data.recovery.trim()),member.recovery))fail(401,'ニックネームまたは復旧コードを確認してください。');
-      const recovery=id();const password=await passwordHash(data.password);
-      await db().batch([db().prepare('UPDATE members SET password=?,recovery=? WHERE id=?').bind(password,await hash(recovery),member.id),db().prepare('DELETE FROM sessions WHERE member_id=?').bind(member.id)]);
-      return json({recovery},200,{'Set-Cookie':await issueSession(request,event,member.id)});
+      const recovery=id();const password=await passwordHash(data.password);const authVersion=id();
+      const recoveryHash=await hash(recovery);const grant=await sessionGrant(request,event,member.id,authVersion);
+      const result=await db().batch([
+        db().prepare('UPDATE members SET password=?,recovery=?,auth_version=? WHERE id=? AND recovery=? AND auth_version=?').bind(password,recoveryHash,authVersion,member.id,member.recovery,member.auth_version),
+        db().prepare('DELETE FROM sessions WHERE member_id=? AND auth_version<>(SELECT auth_version FROM members WHERE id=?)').bind(member.id,member.id),
+        grant.statement,
+      ]);
+      if(!result[0].meta.changes||!result[2].meta.changes)fail(409,'認証情報が変更されました。最新の復旧コードでお試しください。');
+      return json({recovery},200,{'Set-Cookie':grant.cookie});
     }
     if(action==='join'&&method==='POST'){
       if(event.status!=='open')fail(409,'回答の受付は終了しています。');
@@ -165,7 +183,7 @@ export async function api(request:Request):Promise<Response>{
       // The conditional insert makes the participant cap robust to concurrent registrations.
       const result=await db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,1,?,? WHERE (SELECT COUNT(*) FROM members WHERE event_id=?)<101 AND EXISTS(SELECT 1 FROM events WHERE id=? AND revision=? AND status=\'open\' AND expires_at>?)').bind(memberId,eventId,nickname,'participant',pass,await hash(recovery),JSON.stringify(availability),now,now,eventId,eventId,event.revision,now).run();
       if(!result.meta.changes)fail(409,'受付状況が変更されました。画面を更新してください。');
-      return json({recovery},201,{'Set-Cookie':await issueSession(request,event,memberId)});
+      return json({recovery},201,{'Set-Cookie':await issueSession(request,event,{id:memberId,auth_version:'initial'})});
     }
     const me=await session(request,eventId);if(!me)fail(401,'ニックネームとパスワードでログインしてください。');
     if(action==='logout'&&method==='POST'){
@@ -177,28 +195,34 @@ export async function api(request:Request):Promise<Response>{
       if(me.role!=='participant')fail(403,'オーナーは候補時間の設定から編集してください。');
       if(event.status!=='open')fail(409,'回答の受付は終了しています。');
       const data=await body(request);const availability=validateAvailability(data.availability,event.dates);
-      const result=await db().prepare('UPDATE members SET availability=?,version=version+1 WHERE id=? AND version=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND revision=? AND status=\'open\' AND expires_at>?)').bind(JSON.stringify(availability),me.id,data.version,eventId,data.revision,Date.now()).run();
+      const result=await db().prepare('UPDATE members SET availability=?,version=version+1 WHERE id=? AND version=? AND auth_version=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND revision=? AND status=\'open\' AND expires_at>?)').bind(JSON.stringify(availability),me.id,data.version,me.auth_version,eventId,data.revision,Date.now()).run();
       if(!result.meta.changes)fail(409,'回答または候補が更新されています。画面を更新してから再度編集してください。');
       return json({ok:true});
     }
     if(action==='profile'&&method==='PATCH'){
       const data=await body(request);if(!await verifyPassword(data.currentPassword,me.password))fail(401,'現在のパスワードを確認してください。');
       const nickname=canonicalNickname(data.nickname);const duplicate=await db().prepare('SELECT id FROM members WHERE event_id=? AND nickname=? AND id<>?').bind(eventId,nickname,me.id).first();if(duplicate)fail(409,'そのニックネームは使われています。');
-      const pass=data.password?await passwordHash(data.password):me.password;
-      await db().batch([db().prepare('UPDATE members SET nickname=?,password=?,version=version+1 WHERE id=?').bind(nickname,pass,me.id),db().prepare('DELETE FROM sessions WHERE member_id=?').bind(me.id)]);
-      return json({ok:true},200,{'Set-Cookie':await issueSession(request,event,me.id)});
+      const pass=data.password?await passwordHash(data.password):me.password;const authVersion=id();
+      const grant=await sessionGrant(request,event,me.id,authVersion);
+      const result=await db().batch([
+        db().prepare('UPDATE members SET nickname=?,password=?,auth_version=?,version=version+1 WHERE id=? AND auth_version=?').bind(nickname,pass,authVersion,me.id,me.auth_version),
+        db().prepare('DELETE FROM sessions WHERE member_id=? AND auth_version<>(SELECT auth_version FROM members WHERE id=?)').bind(me.id,me.id),
+        grant.statement,
+      ]);
+      if(!result[0].meta.changes||!result[2].meta.changes)fail(409,'認証情報が変更されました。再度ログインしてください。');
+      return json({ok:true},200,{'Set-Cookie':grant.cookie});
     }
     if(action==='answer'&&method==='DELETE'){
       if(me.role!=='participant')fail(403,'オーナーはイベント削除を使用してください。');
-      await db().prepare('DELETE FROM members WHERE id=?').bind(me.id).run();return json({ok:true},200,{'Set-Cookie':cookie(request,eventId,'',0)});
+      const result=await db().prepare('DELETE FROM members WHERE id=? AND auth_version=?').bind(me.id,me.auth_version).run();if(!result.meta.changes)fail(409,'認証情報が変更されました。再度ログインしてください。');return json({ok:true},200,{'Set-Cookie':cookie(request,eventId,'',0)});
     }
     if(me.role!=='owner')fail(403,'この操作はオーナーのみ利用できます。');
     if(action==='member'&&method==='DELETE'){
-      const data=await body(request);await db().prepare('DELETE FROM members WHERE id=? AND event_id=? AND role=\'participant\'').bind(data.memberId,eventId).run();return json({ok:true});
+      const data=await body(request);await db().prepare('DELETE FROM members WHERE id=? AND event_id=? AND role=\'participant\' AND EXISTS(SELECT 1 FROM members owner WHERE owner.id=? AND owner.auth_version=?)').bind(data.memberId,eventId,me.id,me.auth_version).run();return json({ok:true});
     }
     if(parts.length===2&&method==='DELETE'){
       const data=await body(request);if(!await verifyPassword(data.password,me.password))fail(401,'パスワードを確認してください。');
-      await db().prepare('DELETE FROM events WHERE id=?').bind(eventId).run();return json({ok:true},200,{'Set-Cookie':cookie(request,eventId,'',0)});
+      const result=await db().prepare('DELETE FROM events WHERE id=? AND EXISTS(SELECT 1 FROM members WHERE id=? AND auth_version=?)').bind(eventId,me.id,me.auth_version).run();if(!result.meta.changes)fail(409,'認証情報が変更されました。再度ログインしてください。');return json({ok:true},200,{'Set-Cookie':cookie(request,eventId,'',0)});
     }
     if(parts.length===2&&method==='PATCH'){
       const data=await body(request);const title=text(data.title,80,true),description=text(data.description,500);const state=data.status;
@@ -210,7 +234,7 @@ export async function api(request:Request):Promise<Response>{
         if(!Number.isInteger(start)||!day||!Array.from({length:event.duration/30},(_,i)=>start+i).every(s=>day.slots.includes(s)))fail(400,'候補内の連続した時間帯を選んでください。');
         confirmed=data.confirmed;
       }
-      const result=await db().prepare('UPDATE events SET title=?,description=?,status=?,confirmed=?,revision=revision+1 WHERE id=? AND revision=? AND expires_at>?').bind(title,description,state,confirmed,eventId,data.revision,Date.now()).run();
+      const result=await db().prepare('UPDATE events SET title=?,description=?,status=?,confirmed=?,revision=revision+1 WHERE id=? AND revision=? AND expires_at>? AND EXISTS(SELECT 1 FROM members WHERE id=? AND auth_version=?)').bind(title,description,state,confirmed,eventId,data.revision,Date.now(),me.id,me.auth_version).run();
       if(!result.meta.changes)fail(409,'イベントが更新されています。画面を更新してください。');return json({ok:true});
     }
     return fail(404,'操作が見つかりません。');
