@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers';
 import { canonicalNickname, expiration, validateAvailability, validateDays, type EventData, type Member, type Snapshot } from './scheduling';
 const VERSION='2026-10-28-draft';
 const encoder=new TextEncoder();
-const db=()=>{if(!env.DB)throw new Error('保存先が設定されていません。');return env.DB;};
+const db=()=>{if(!env.DB)throw new OperationError('OT_DB_NOT_CONFIGURED');return env.DB;};
+class OperationError extends Error { constructor(public code:string){super(code);} }
 class HttpError extends Error { constructor(public status:number,message:string){super(message);} }
 const fail=(status:number,message:string):never=>{throw new HttpError(status,message);};
 const id=()=>crypto.randomUUID().replaceAll('-','');
@@ -11,9 +12,15 @@ const hex=(value:Uint8Array)=>Array.from(value).map(x=>x.toString(16).padStart(2
 const same=(a:string,b:string)=>{let mismatch=a.length^b.length;for(let i=0;i<Math.max(a.length,b.length);i++)mismatch|=(a.charCodeAt(i)||0)^(b.charCodeAt(i)||0);return mismatch===0;};
 async function passwordHash(value:unknown,salt=hex(crypto.getRandomValues(new Uint8Array(16)))) {
   if(typeof value!=='string'||value.length<10||value.length>128)fail(400,'パスワードは10〜128文字で設定してください。');
-  const key=await crypto.subtle.importKey('raw',encoder.encode(value as string),'PBKDF2',false,['deriveBits']);
-  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',iterations:600000,salt:encoder.encode(salt)},key,256);
-  return `pbkdf2-sha256$600000$${salt}$${hex(new Uint8Array(bits))}`;
+  try {
+    const key=await crypto.subtle.importKey('raw',encoder.encode(value as string),'PBKDF2',false,['deriveBits']);
+    const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',iterations:600000,salt:encoder.encode(salt)},key,256);
+    return `pbkdf2-sha256$600000$${salt}$${hex(new Uint8Array(bits))}`;
+  } catch(error) {
+    // Report a fixed category only; native exception messages can contain inputs.
+    const message=error instanceof Error?error.message:'';
+    throw new OperationError(/iteration counts above.*not supported/i.test(message)?'OT_AUTH_HASH_LIMIT':'OT_AUTH_HASH_FAILED');
+  }
 }
 async function verifyPassword(value:unknown,stored:string) {
   if(typeof value!=='string'||value.length<10||value.length>128)return false;
@@ -167,7 +174,12 @@ export async function api(request:Request):Promise<Response>{
   }catch(error){
     if(error instanceof HttpError)return json({error:error.message},error.status);
     if(error instanceof Error&&/^(候補|回答|ニックネーム)/.test(error.message))return json({error:error.message},400);
-    // No payloads, secrets or credential-bearing requests are logged.
-    return json({error:'処理できませんでした。時間をおいて再度お試しください。'},500);
+    // Fixed diagnostic codes remain available with observability disabled. Never
+    // return or log raw exceptions, request bodies, IP addresses, or credentials.
+    const message=error instanceof Error?error.message:'';
+    const code=error instanceof OperationError?error.code:
+      /no such (?:table|column)|has no column named/i.test(message)?'OT_DB_SCHEMA':
+      /D1_ERROR|D1_EXEC_ERROR|SQLITE_/i.test(message)?'OT_DB_FAILED':'OT_INTERNAL';
+    return json({error:`処理できませんでした。エラーコード：${code}`,code},500);
   }
 }
