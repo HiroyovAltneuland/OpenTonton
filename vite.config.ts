@@ -1,4 +1,5 @@
 import vinext from "vinext";
+import { RATE_LIMIT_BINDINGS } from "./lib/edge-rate-config.mjs";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { readExecutionProfile } from "./scripts/execution-profile.mjs";
@@ -17,6 +18,8 @@ const managedLinux = readExecutionProfile() === "managed-linux";
 
 const localBindingConfig = {
   main: "./worker/index.ts",
+  ratelimits: RATE_LIMIT_BINDINGS,
+  // Keep local and production migration discovery aligned.
   triggers: { crons: ["0 * * * *"] },
   observability: { enabled: false },
   compatibility_flags: ["nodejs_compat"],
@@ -26,6 +29,7 @@ const localBindingConfig = {
           binding: d1,
           database_name: "site-creator-d1",
           database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          migrations_dir: "./drizzle",
         },
       ]
     : [],
