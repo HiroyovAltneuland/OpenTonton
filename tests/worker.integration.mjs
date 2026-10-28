@@ -11,7 +11,7 @@ try {
  for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await database.prepare(statement).run();
  const base='http://localhost';
  let ownerCookie='',participantCookie='';
- async function call(path,method='GET',body,cookie='',origin=base){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ async function call(path,method='GET',body,cookie='',origin=base,address='192.0.2.10'){const r=await mf.dispatchFetch(base+'/api/events'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,'CF-Connecting-IP':address,...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let data;try{data=JSON.parse(text);}catch{throw Error(`Unexpected response ${r.status}: ${text.slice(0,200)}`);}return {status:r.status,data,retryAfter:r.headers.get('retry-after'),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
  const day=new Date(Date.now()+9*3600000+86400000).toISOString().slice(0,10);
  const payload={title:'Test-only event',description:'Synthetic test content',nickname:'test-owner',password:'test-only-opentonton-5829',duration:60,dates:[{date:day,slots:[18,19,20,21]}],agreed:true};
  const created=await call('','POST',payload);assert.equal(created.status,201,JSON.stringify(created));const id=created.data.id;ownerCookie=created.cookie;assert(created.data.recovery);console.log('PASS create event with hashed password');
@@ -30,5 +30,45 @@ try {
  // Force expiry only in this isolated test database.
  await database.prepare('UPDATE events SET expires_at=? WHERE id=?').bind(Date.now()-1000,id).run();
  const expired=await call('/'+id);assert([404,410].includes(expired.status));assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM members WHERE event_id=?').bind(id).first()).n,0);assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n,0);console.log('PASS expiry blocks reads and cascades removal of answers and credentials');
- const raw=await database.prepare('SELECT COUNT(*) AS n FROM events').first();assert.equal(raw.n,0);console.log('All integration checks passed.');
+ const raw=await database.prepare('SELECT COUNT(*) AS n FROM events').first();assert.equal(raw.n,0);
+ // Leave enough of the fixed minute window for the burst and concurrency checks.
+ const minuteRemaining=60000-Date.now()%60000;
+ if(minuteRemaining<5000)await new Promise(resolve=>setTimeout(resolve,minuteRemaining+50));
+ const digest=async text=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))).map(n=>n.toString(16).padStart(2,'0')).join('');
+ const quotaKey=address=>digest(`create-success:${address}:${Math.floor(Date.now()/3600000)}`);
+ const burstIP='192.0.2.20';
+ for(let n=0;n<10;n++)assert.equal((await call('','POST',{...payload,agreed:false},'',base,burstIP)).status,400);
+ const burst=await call('','POST',payload,'',base,burstIP);
+ assert.equal(burst.status,429);assert.match(burst.data.error,/1分間/);assert(Number(burst.retryAfter)>0&&Number(burst.retryAfter)<=60);
+ assert.equal(await database.prepare('SELECT count FROM rate_limits WHERE key=?').bind(await quotaKey(burstIP)).first(),null);
+ console.log('PASS ten attempts per minute; invalid inputs consume no successful-create quota');
+ const failureIP='192.0.2.30';
+ await database.prepare("CREATE TRIGGER fail_create_session BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'synthetic session failure'); END").run();
+ for(let n=0;n<3;n++)assert.equal((await call('','POST',payload,'',base,failureIP)).status,500);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM events').first()).n,0);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM members').first()).n,0);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n,0);
+ assert.equal(await database.prepare('SELECT count FROM rate_limits WHERE key=?').bind(await quotaKey(failureIP)).first(),null);
+ await database.prepare('DROP TRIGGER fail_create_session').run();
+ const retried=await call('','POST',payload,'',base,failureIP);assert.equal(retried.status,201,JSON.stringify(retried));
+ assert.equal((await database.prepare('SELECT count FROM rate_limits WHERE key=?').bind(await quotaKey(failureIP)).first()).count,1);
+ assert.equal((await call('/'+retried.data.id,'GET',undefined,retried.cookie)).data.me.role,'owner');
+ console.log('PASS internal errors roll back event, owner, session and quota; successful retry counts once');
+ const concurrentIP='192.0.2.40';const concurrentKey=await quotaKey(concurrentIP);
+ await database.prepare('INSERT INTO rate_limits(key,count,expires_at) VALUES(?,19,?)').bind(concurrentKey,(Math.floor(Date.now()/3600000)+1)*3600000).run();
+ const race=await Promise.all([call('','POST',payload,'',base,concurrentIP),call('','POST',payload,'',base,concurrentIP)]);
+ assert.deepEqual(race.map(r=>r.status).sort(),[201,429]);
+ const blocked=race.find(r=>r.status===429);assert.match(blocked.data.error,/20件/);assert(Number(blocked.retryAfter)>0&&Number(blocked.retryAfter)<=3600);
+ assert.equal((await database.prepare('SELECT count FROM rate_limits WHERE key=?').bind(concurrentKey).first()).count,20);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM events').first()).n,2);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM members').first()).n,2);
+ assert.equal((await database.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n,2);
+ assert.equal((await call('','POST',payload,'',base,concurrentIP)).status,429);
+ console.log('PASS concurrent creates enforce twenty successes per hour with no partial records');
+ // Isolated DB only: expire both windows to verify cleanup releases quota.
+ await database.prepare('UPDATE rate_limits SET expires_at=?').bind(Date.now()-1000).run();
+ assert.equal((await call('','POST',payload,'',base,concurrentIP)).status,201);
+ const keys=await database.prepare('SELECT key FROM rate_limits').all();assert(keys.results.every(r=>/^[a-f0-9]{64}$/.test(r.key)));
+ console.log('PASS expired quotas are cleaned up; raw IP addresses are not stored');
+ console.log('All integration checks passed.');
 } finally { await mf.dispose(); }
