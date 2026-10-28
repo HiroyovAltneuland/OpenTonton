@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { PASSWORD_SCHEME, PASSWORD_ITERATIONS, randomPasswordSalt, validPasswordProof } from './password-client';
 import { canonicalNickname, expiration, validateAvailability, validateDays, type EventData, type Member, type Snapshot } from './scheduling';
 const VERSION='2026-10-28-draft';
 const encoder=new TextEncoder();
@@ -10,21 +11,29 @@ const id=()=>crypto.randomUUID().replaceAll('-','');
 const hash=async(value:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value)))).map(x=>x.toString(16).padStart(2,'0')).join('');
 const hex=(value:Uint8Array)=>Array.from(value).map(x=>x.toString(16).padStart(2,'0')).join('');
 const same=(a:string,b:string)=>{let mismatch=a.length^b.length;for(let i=0;i<Math.max(a.length,b.length);i++)mismatch|=(a.charCodeAt(i)||0)^(b.charCodeAt(i)||0);return mismatch===0;};
-async function passwordHash(value:unknown,salt=hex(crypto.getRandomValues(new Uint8Array(16)))) {
-  if(typeof value!=='string'||value.length<10||value.length>128)fail(400,'パスワードは10〜128文字で設定してください。');
-  try {
-    const key=await crypto.subtle.importKey('raw',encoder.encode(value as string),'PBKDF2',false,['deriveBits']);
-    const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',iterations:600000,salt:encoder.encode(salt)},key,256);
-    return `pbkdf2-sha256$600000$${salt}$${hex(new Uint8Array(bits))}`;
-  } catch(error) {
-    // Report a fixed category only; native exception messages can contain inputs.
-    const message=error instanceof Error?error.message:'';
-    throw new OperationError(/iteration counts above.*not supported/i.test(message)?'OT_AUTH_HASH_LIMIT':'OT_AUTH_HASH_FAILED');
-  }
+// Store a salted digest of the stretched credential, never the credential that
+// can be replayed at login. A DB-only leak still requires the per-user 600k KDF
+// for every password guess. HTTPS and the no-credential-logging rule are required.
+const storedVerifier=(verifier:string,salt:string,serverSalt:string)=>hash(`OpenTonton stored verifier v1:${salt}:${serverSalt}:${verifier}`);
+function passwordRecord(stored:string){
+  const [scheme,iterations,salt,serverSalt,digest,...extra]=stored.split('$');
+  if(scheme!==PASSWORD_SCHEME||iterations!==String(PASSWORD_ITERATIONS)||extra.length||!/^[a-f0-9]{32}$/.test(salt||'')||!/^[a-f0-9]{32}$/.test(serverSalt||'')||!/^[a-f0-9]{64}$/.test(digest||''))return null;
+  return {salt,serverSalt,digest};
+}
+async function passwordHash(value:unknown) {
+  if(typeof value==='string')fail(409,'認証方式が更新されました。画面を再読み込みしてからお試しください。');
+  if(!validPasswordProof(value))return fail(400,'パスワードの送信形式を確認してください。画面を再読み込みしてください。');
+  const serverSalt=randomPasswordSalt();
+  return `${PASSWORD_SCHEME}$${PASSWORD_ITERATIONS}$${value.salt}$${serverSalt}$${await storedVerifier(value.verifier,value.salt,serverSalt)}`;
 }
 async function verifyPassword(value:unknown,stored:string) {
-  if(typeof value!=='string'||value.length<10||value.length>128)return false;
-  return same(await passwordHash(value,stored.split('$')[2]),stored);
+  if(typeof value==='string')fail(409,'認証方式が更新されました。画面を再読み込みしてからお試しください。');
+  const record=passwordRecord(stored);
+  // Legacy hashes cannot be verified under Workers' iteration cap. Do not
+  // expose them as login credentials or silently weaken their work factor.
+  if(!record&&stored.startsWith('pbkdf2-sha256$'))fail(409,'以前の認証形式です。復旧コードからパスワードを再設定してください。');
+  if(!record||!validPasswordProof(value)||!same(value.salt,record.salt))return false;
+  return same(await storedVerifier(value.verifier,record.salt,record.serverSalt),record.digest);
 }
 function parseEvent(row:any):EventData {return {id:row.id,title:row.title,description:row.description,dates:JSON.parse(row.dates),duration:row.duration,createdAt:row.created_at,expiresAt:row.expires_at,status:row.status,confirmed:row.confirmed,revision:row.revision};}
 function parseMember(row:any):Member{return {id:row.id,nickname:row.nickname,role:row.role,availability:JSON.parse(row.availability),version:row.version};}
@@ -122,6 +131,17 @@ export async function api(request:Request):Promise<Response>{
     }
     const eventId=parts[1];const event=await activeEvent(eventId);const action=parts[2];
     if(parts.length===2&&method==='GET')return json(await snapshot(request,event));
+    if(action==='credentials'&&method==='POST'){
+      await limit(request,`credentials:${eventId}`,60,900000);
+      const data=await body(request);
+      const member=data.self===true?await session(request,eventId):await db().prepare('SELECT password FROM members WHERE event_id=? AND nickname=?').bind(eventId,canonicalNickname(data.nickname)).first<{password:string}>();
+      if(data.self===true&&!member)fail(401,'ニックネームとパスワードでログインしてください。');
+      const record=member?passwordRecord(member.password):null;
+      if(member&&!record&&member.password.startsWith('pbkdf2-sha256$'))fail(409,'以前の認証形式です。復旧コードからパスワードを再設定してください。');
+      // Salts are public KDF parameters. Unknown names get the same shape;
+      // stored digests, server salts and recovery codes are never returned.
+      return json({scheme:PASSWORD_SCHEME,salt:record?.salt||randomPasswordSalt()});
+    }
     if(action==='login'&&method==='POST'){
       await limit(request,`login:${eventId}`,12,900000);const data=await body(request);const nickname=canonicalNickname(data.nickname);
       const member=await db().prepare('SELECT * FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first<any>();
