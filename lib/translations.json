@@ -323,7 +323,7 @@
   "コピー": "Copy",
   "自分で入力することもできます。ブラウザやパスワード管理アプリに保存してください。": "You can also enter your own password. Save it in your browser or password manager.",
   "回答に表示する名前": "Name shown with your response",
-  "主催者があなたを見分けられる呼び名に変更できます。本名は不要です。自動の番号は登録時に確定します。": "You can change this to a name the organizer recognizes. Your real name is not needed. Automatic numbers are finalized when you register.",
+  "主催者があなたを見分けられる呼び名を入力してください。本名は不要です。": "Enter a name the organizer recognizes. Your real name is not needed.",
   "「{0}」として登録しました。": "Registered as “{0}”.",
   "名前・パスワード・復旧コードを手元に保存してください。この情報を他の人に共有しないでください。": "Save your name, password and recovery code. Do not share this information with anyone else.",
   "認証情報をまとめてコピー": "Copy sign-in details"
