@@ -314,5 +314,7 @@
   "最終候補日の翌日0時（イベントのタイムゾーン）と、作成日時から30日後の早い方が保存期限です。候補日は保存期限内に限ります。期限後は閲覧・編集・出力ができなくなり、通常データは原則24時間以内に削除します。復旧用履歴には削除後最大7日間残る場合があります。必要な結果は期限前に保存してください。": "The retention deadline is midnight following the final candidate date in the event time zone, or 30 days after creation, whichever is earlier. Candidate dates must fall within that period. After expiry, viewing, editing, and export are disabled. Regular data is normally deleted within 24 hours. Recovery history may retain data for up to 7 days after deletion. Save any results you need before expiry.",
   "参加者は自分のニックネームとパスワードを設定し、参加できる30分枠に〇をつけます。枠を選ばず「このイベント日付の候補には参加できません」も登録できます。": "Participants choose a nickname and password, then mark the 30-minute slots they can attend. They can also mark all candidates in an event-date group as unavailable.",
   "初期値は日本時間です。UTC時差は現在の夏時間を反映しています。変更すると選択済み候補日を解除します。作成後は変更できません。": "Defaults to Japan time. UTC offsets reflect current daylight saving time. Changing the zone clears selected dates. It cannot be changed after creation.",
-  "UTC時差は現在の夏時間を反映しています。": "UTC offsets reflect current daylight saving time."
+  "UTC時差は現在の夏時間を反映しています。": "UTC offsets reflect current daylight saving time.",
+  "参加人数": "Available",
+  "候補": "Candidates"
 }
