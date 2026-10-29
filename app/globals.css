@@ -46,3 +46,9 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 @media(max-width:767px){.event-zone-view .hour>small{display:none}}
 
 .password-tools{min-width:0}.password-tools>input{width:100%}.password-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.password-buttons .secondary{font-size:1rem;min-height:44px;padding:8px 12px;white-space:normal}.password-tools .field-hint{margin-top:10px;line-height:1.7}.registration-summary{padding:16px;border:1px solid #acb9c9;border-radius:8px;margin:16px 0}.registration-summary>p{overflow-wrap:anywhere;margin-bottom:12px}.registration-summary>.secondary{margin:4px 8px 4px 0;white-space:normal}.registration-summary input{width:100%}
+
+/* Fit display controls within the answer column on desktop and mobile. */
+.availability-form>.timezone-toolbar{gap:12px;padding:14px;margin-bottom:18px}
+.availability-form>.timezone-toolbar>div{flex-basis:100%;min-width:0}
+.availability-form>.timezone-toolbar label{flex:1;min-width:0;width:100%}
+.availability-form>.timezone-toolbar select{width:100%;min-width:0}
