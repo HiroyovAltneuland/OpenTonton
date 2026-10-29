@@ -50,3 +50,14 @@ test('ranges share dates and offsets, preserving cross-year and clock-change dis
  const nepal=makeClock('Asia/Tokyo','Asia/Kathmandu',[],'en');
  assert.equal(nepal.range('2026-10-30',18,20),'Fri, Oct 30, 2026 05:45–06:45 (UTC+05:45)');
 });
+test('zone dropdown groups descend from positive UTC offsets through fractional and negative offsets',async()=>{
+ const {groupTimeZones}=await import('../lib/time-zone.ts');
+ const zones=['America/New_York','Asia/Tokyo','Asia/Kathmandu','Asia/Katmandu','UTC','Pacific/Kiritimati','Pacific/Honolulu','Asia/Seoul'];
+ const winter=groupTimeZones(zones,Date.parse('2026-12-01T00:00:00Z'));
+ assert.deepEqual(winter.map(g=>g.offset),[840,540,345,0,-300,-600]);
+ assert.deepEqual(winter[1].zones,['Asia/Seoul','Asia/Tokyo']);
+ assert.equal(winter[2].zones.length,1);
+ assert.equal(winter[2].label,'UTC+05:45');
+ assert.equal(groupTimeZones(['America/New_York'],Date.parse('2026-07-01T00:00:00Z'))[0].label,'UTC-04:00');
+ assert.deepEqual(groupTimeZones([],Date.now()),[]);
+});

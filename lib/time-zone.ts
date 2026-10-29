@@ -62,3 +62,13 @@ export function availableTimeZones(extra: string[] = []): string[] {
   let supported:string[]=[];try{supported=Intl.supportedValuesOf('timeZone');}catch{/* Common zones work on older browsers too. */}
   return [...new Set([...COMMON_TIME_ZONES,...extra,...supported])];
 }
+export function groupTimeZones(zones: string[], at: number) {
+  const unique = [...new Set(zones.map(zone=>canonicalTimeZone(zone)))];
+  const groups = new Map<number, {offset: number; label: string; zones: string[]}>();
+  for (const zone of unique) {
+    const offset = offsetMinutes(at, zone);
+    if (!groups.has(offset)) groups.set(offset, {offset, label: offsetLabel(at, zone), zones: []});
+    groups.get(offset)!.zones.push(zone);
+  }
+  return [...groups.values()].sort((a,b)=>b.offset-a.offset).map(group=>({...group,zones:group.zones.sort()}));
+}
