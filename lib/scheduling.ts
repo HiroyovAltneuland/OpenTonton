@@ -3,7 +3,7 @@ export type Day = { date: string; slots: number[]; startAt?: number };
 export type Availability = Record<string, number[]>;
 export type EventData = { id: string; timeZone: string; title: string; description: string; dates: Day[]; duration: number; createdAt: number; expiresAt: number; status: 'open'|'closed'|'confirmed'; confirmed: string|null; revision: number };
 export type Member = { id: string; nickname: string; role: 'owner'|'participant'; availability: Availability; version: number };
-export type Snapshot = { event: EventData; members: Member[]; me: Member|null };
+export type Snapshot = { event: EventData; members: Member[]; me: Member|null; nextParticipantNumber?: number };
 export const DAY_MS = 86400000;
 export const timeLabel = (slot: number) => `${String(Math.floor(slot / 2)).padStart(2,'0')}:${slot % 2 ? '30' : '00'}`;
 export const jstDate = (at = Date.now()) => new Date(at + 9 * 3600000).toISOString().slice(0,10);

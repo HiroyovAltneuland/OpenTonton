@@ -95,7 +95,8 @@ async function activeEvent(eventId:string) {
 async function snapshot(request:Request,event:EventData):Promise<Snapshot>{
   const rows=await db().prepare('SELECT id,nickname,role,availability,version FROM members WHERE event_id=? ORDER BY created_at,id').bind(event.id).all();
   const me=await session(request,event.id);
-  return {event,members:rows.results.map(parseMember),me:me?parseMember(me):null};
+  const sequence=await db().prepare('SELECT participant_sequence FROM events WHERE id=?').bind(event.id).first<{participant_sequence:number}>();
+  return {event,members:rows.results.map(parseMember),me:me?parseMember(me):null,nextParticipantNumber:(sequence?.participant_sequence||0)+1};
 }
 function text(value:unknown,max:number,required=false){if(typeof value!=='string'||value.length>max||(required&&!value.trim()))fail(400,`入力内容を確認してください（最大${max}文字）。`);return (value as string).trim();}
 const duration=(value:unknown)=>{if(![30,60,90,120].includes(value as number))fail(400,'開催時間を選択してください。');return value as number;};
@@ -179,13 +180,23 @@ export async function api(request:Request):Promise<Response>{
     if(action==='join'&&method==='POST'){
       if(event.status!=='open')fail(409,'回答の受付は終了しています。');
       const data=await body(request);agree(data);if(data.revision!==event.revision)fail(409,'候補が変更されました。画面を更新してください。');
-      const nickname=canonicalNickname(data.nickname);const existing=await db().prepare('SELECT id FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first();if(existing)fail(409,'このニックネームは使われています。別の名前にするかログインしてください。');
+      const automatic=data.autoNickname===true;let nickname=automatic?'':canonicalNickname(data.nickname);if(!automatic){const existing=await db().prepare('SELECT id FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first();if(existing)fail(409,'このニックネームは使われています。別の名前にするかログインしてください。');}
       const count=await db().prepare('SELECT COUNT(*) AS n FROM members WHERE event_id=?').bind(eventId).first<{n:number}>();if((count?.n||0)>=101)fail(409,'参加者数の上限に達しました。');
       const availability=validateAvailability(data.availability,event.dates);const memberId=id();const recovery=id();const pass=await passwordHash(data.password);const now=Date.now();
-      // The conditional insert makes the participant cap robust to concurrent registrations.
-      const result=await db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,1,?,? WHERE (SELECT COUNT(*) FROM members WHERE event_id=?)<101 AND EXISTS(SELECT 1 FROM events WHERE id=? AND revision=? AND status=\'open\' AND expires_at>?)').bind(memberId,eventId,nickname,'participant',pass,await hash(recovery),JSON.stringify(availability),now,now,eventId,eventId,event.revision,now).run();
-      if(!result.meta.changes)fail(409,'受付状況が変更されました。画面を更新してください。');
-      return json({recovery},201,{'Set-Cookie':await issueSession(request,event,{id:memberId,auth_version:'initial'})});
+      const recoveryHash=await hash(recovery);
+      for(let attempt=0;attempt<102;attempt++){
+        if(automatic){
+          const allocated=await db().prepare("UPDATE events SET participant_sequence=participant_sequence+1 WHERE id=? AND revision=? AND status='open' AND expires_at>? RETURNING participant_sequence").bind(eventId,event.revision,now).first<{participant_sequence:number}>();
+          if(!allocated)fail(409,'受付状況が変更されました。画面を更新してください。');
+          nickname=(data.nicknameLanguage==='en'?'Participant ':'参加者')+allocated!.participant_sequence;
+        }
+        const result=await db().prepare("INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,1,?,? WHERE (SELECT COUNT(*) FROM members WHERE event_id=?)<101 AND EXISTS(SELECT 1 FROM events WHERE id=? AND revision=? AND status='open' AND expires_at>?) ON CONFLICT(event_id,nickname) DO NOTHING").bind(memberId,eventId,nickname,'participant',pass,recoveryHash,JSON.stringify(availability),now,now,eventId,eventId,event.revision,now).run();
+        if(result.meta.changes)return json({recovery,nickname},201,{'Set-Cookie':await issueSession(request,event,{id:memberId,auth_version:'initial'})});
+        const collision=await db().prepare('SELECT id FROM members WHERE event_id=? AND nickname=?').bind(eventId,nickname).first();
+        if(!collision)fail(409,'受付状況が変更されました。画面を更新してください。');
+        if(!automatic)fail(409,'このニックネームは使われています。別の名前にするかログインしてください。');
+      }
+      fail(409,'受付状況が変更されました。画面を更新してください。');
     }
     const me=await session(request,eventId);if(!me)fail(401,'ニックネームとパスワードでログインしてください。');
     if(action==='logout'&&method==='POST'){

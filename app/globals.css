@@ -44,3 +44,5 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 @media(max-width:767px){.timeline thead .person-cell{height:48px;padding-top:8px;padding-bottom:8px}.timeline .hour{height:48px}.timeline .hour>small:empty{display:none}}
 
 @media(max-width:767px){.event-zone-view .hour>small{display:none}}
+
+.password-tools{min-width:0}.password-tools>input{width:100%}.password-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.password-buttons .secondary{font-size:1rem;min-height:44px;padding:8px 12px;white-space:normal}.password-tools .field-hint{margin-top:10px;line-height:1.7}.registration-summary{padding:16px;border:1px solid #acb9c9;border-radius:8px;margin:16px 0}.registration-summary>p{overflow-wrap:anywhere;margin-bottom:12px}.registration-summary>.secondary{margin:4px 8px 4px 0;white-space:normal}.registration-summary input{width:100%}
