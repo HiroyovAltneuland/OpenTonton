@@ -2,7 +2,7 @@ import { canonicalTimeZone, slotInstant } from './time-zone';
 import { env } from 'cloudflare:workers';
 import { PASSWORD_SCHEME, PASSWORD_ITERATIONS, randomPasswordSalt, validPasswordProof } from './password-client';
 import { canonicalNickname, expiration, validateAvailability, validateDays, type EventData, type Member, type Snapshot } from './scheduling';
-const VERSION='2026-10-29-draft';
+const VERSION='2026-11-02-draft';
 const encoder=new TextEncoder();
 const db=()=>{if(!env.DB)throw new OperationError('OT_DB_NOT_CONFIGURED');return env.DB;};
 class OperationError extends Error { constructor(public code:string){super(code);} }

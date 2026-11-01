@@ -15,8 +15,8 @@ test('candidate today and expiry use the event zone, never the viewer or host zo
  const days=validateDays([{date:'2026-10-27',slots:[40,41],startAt:0}],created,created,'America/Los_Angeles');
  assert.deepEqual(days,[{date:'2026-10-27',slots:[40,41]}]);
  assert.equal(expiration(days,created,'America/Los_Angeles'),Date.parse('2026-10-28T07:00:00Z'));
- assert.throws(()=>validateDays([{date:'2026-11-27',slots:[18]}],created,created,'America/Los_Angeles'));
- assert.equal(expiration([{date:'2026-12-01',slots:[18]}],created,'America/New_York'),created+30*DAY_MS);
+ assert.throws(()=>validateDays([{date:'2027-01-28',slots:[18]}],created,created,'America/Los_Angeles'));
+ assert.equal(expiration([{date:'2026-12-01',slots:[18]}],created,'America/New_York'),dayStart('2026-12-02','America/New_York'));
 });
 test('event clock-change days are rejected, including half-hour and skipped-day transitions',()=>{
  for(const [date,zone] of [['2026-11-01','America/New_York'],['2026-03-08','America/New_York'],['2026-10-25','Europe/London'],['2026-10-04','Australia/Lord_Howe'],['2011-12-30','Pacific/Apia']])assert.equal(isStableDay(date,zone),false,zone+' '+date);

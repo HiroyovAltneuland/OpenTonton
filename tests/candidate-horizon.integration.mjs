@@ -1,0 +1,56 @@
+import {createRequire} from 'node:module';
+import {readFileSync,readdirSync} from 'node:fs';
+import {resolve} from 'node:path';
+import assert from 'node:assert/strict';
+import {RATE_LIMIT_BINDINGS} from '../lib/edge-rate-config.mjs';
+import {PASSWORD_SCHEME} from '../lib/password-client.ts';
+import {dayStart,isStableDay,slotInstant,zonedDate,nextDate} from '../lib/time-zone.ts';
+import {latestCandidateDate} from '../lib/scheduling.ts';
+const require=createRequire(import.meta.url);
+const {Miniflare,convertV4MiniflareOptions}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
+const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],ratelimits:Object.fromEntries(RATE_LIMIT_BINDINGS.map(({name,...config})=>[name,config]))}));
+try {
+ const db=await mf.getD1Database('DB');
+ for(const f of readdirSync('drizzle').filter(p=>p.endsWith('.sql')).sort())for(const sql of readFileSync('drizzle/'+f,'utf8').split('--> statement-breakpoint').map(x=>x.trim()).filter(Boolean))await db.prepare(sql).run();
+ let seq=0;
+ async function call(path,method='GET',body,cookie=''){const r=await mf.dispatchFetch('http://localhost/api/events'+path,{method,headers:{Origin:'http://localhost','Content-Type':'application/json','CF-Connecting-IP':'2001:db8::'+(++seq).toString(16),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});const raw=await r.text();return {status:r.status,data:JSON.parse(raw),bytes:Buffer.byteLength(raw),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ const now=Date.now(),zone='Asia/Tokyo',latest=latestCandidateDate(now,zone);
+ const proof={scheme:PASSWORD_SCHEME,salt:'a'.repeat(32),verifier:'b'.repeat(64)};
+ const payload={title:'Retention integration',description:'Synthetic only',timeZone:zone,nickname:'owner',password:proof,duration:60,dates:[{date:latest,slots:[18,19]}],agreed:true};
+ assert.equal((await call('','POST',{...payload,dates:[{date:nextDate(latest),slots:[18,19]}]})).status,400);
+ const made=await call('','POST',payload);assert.equal(made.status,201,JSON.stringify(made.data));const id=made.data.id;
+ const snapshot=(await call('/'+id)).data;
+ assert.equal(snapshot.event.expiresAt,dayStart(nextDate(latest),zone));
+ assert(snapshot.event.expiresAt>now+80*86400000);
+ const stored=await db.prepare('SELECT terms_version FROM events WHERE id=?').bind(id).first();assert.equal(stored.terms_version,'2026-11-02-draft');
+ const session=await db.prepare('SELECT expires_at FROM sessions WHERE member_id=?').bind(snapshot.me?.id||snapshot.members[0].id).first();assert(session.expires_at<=Date.now()+7*86400000);
+ console.log('PASS inclusive 3-calendar-month API boundary, midnight expiry, terms version and unchanged 7-day session');
+ // Simulate a pre-release event whose original deletion promise must not change.
+ const legacyId='e'.repeat(32),legacyExpiry=now+30*86400000;
+ await db.prepare('INSERT INTO events(id,title,description,dates,duration,created_at,expires_at,status,revision,terms_version,time_zone) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(legacyId,'Legacy','',JSON.stringify([{date:latest,slots:[18,19]}]),60,now,legacyExpiry,'open',1,'2026-10-29-draft',zone).run();
+ assert.equal((await call('/'+legacyId)).data.event.expiresAt,legacyExpiry);
+ assert.equal((await db.prepare('SELECT expires_at FROM events WHERE id=?').bind(legacyId).first()).expires_at,legacyExpiry);
+ console.log('PASS existing stored 30-day deadline is returned unchanged, never recalculated');
+ const slots=Array.from({length:48},(_,i)=>i),dates=[];let date=zonedDate(now+86400000,zone);
+ for(let i=0;i<29;i++){dates.push({date,slots});date=nextDate(date);}dates.push({date:latest,slots});
+ assert.equal((await call('','POST',{...payload,dates:[...dates,{date:nextDate(date),slots}]})).status,400);
+ const max=await call('','POST',{...payload,dates});assert.equal(max.status,201,JSON.stringify(max.data));
+ const event=(await call('/'+max.data.id)).data.event;
+ const owner=await db.prepare('SELECT * FROM members WHERE event_id=?').bind(max.data.id).first();
+ const availability=Object.fromEntries(dates.map(d=>[d.date,d.slots]));
+ await db.batch(Array.from({length:100},(_,i)=>db.prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) VALUES(?,?,?,?,?,?,?,1,?,?)').bind(crypto.randomUUID().replaceAll('-',''),max.data.id,'test'+i,'participant',owner.password,owner.recovery,JSON.stringify(availability),now,now)));
+ const full=await call('/'+max.data.id);assert.equal(full.status,200);assert.equal(full.data.members.length,101);
+ assert(full.data.members.filter(m=>m.role==='participant').every(m=>Object.keys(m.availability).length===30));
+ const login=await call('/'+max.data.id+'/login','POST',{nickname:'test0',password:proof});assert.equal(login.status,200);
+ const me=(await call('/'+max.data.id,'GET',undefined,login.cookie)).data.me;
+ assert.equal((await call('/'+max.data.id+'/answer','PATCH',{availability,version:me.version,revision:1},login.cookie)).status,200);
+ assert.equal((await call('/'+max.data.id+'/join','POST',{nickname:'overflow',password:proof,availability:{},revision:1,agreed:true})).status,409);
+ console.log('PASS maximum 30 dates / 100 participants / 48 slots: create, snapshot ('+full.bytes+' bytes), login and answer update');
+ // An expired event remains inaccessible and cleanup cascades to all its rows.
+ await db.prepare('UPDATE events SET expires_at=? WHERE id=?').bind(now-1,max.data.id).run();
+ assert.equal((await call('/'+max.data.id)).status,410);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM members WHERE event_id=?').bind(max.data.id).first()).n,0);
+ assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE member_id=?').bind(me.id).first()).n,0);
+ assert.equal((await db.prepare('SELECT expires_at FROM events WHERE id=?').bind(legacyId).first()).expires_at,legacyExpiry);
+ console.log('PASS expired access denial and cascading bounded cleanup preserve unexpired legacy data');
+} finally {await mf.dispose();}

@@ -5,17 +5,35 @@ export type EventData = { id: string; timeZone: string; title: string; descripti
 export type Member = { id: string; nickname: string; role: 'owner'|'participant'; availability: Availability; version: number };
 export type Snapshot = { event: EventData; members: Member[]; me: Member|null; nextParticipantNumber?: number };
 export const DAY_MS = 86400000;
+export const CANDIDATE_MONTHS = 3;
+export const MAX_CANDIDATE_DAYS = 30;
+/** Inclusive civil-date limit; clamp month ends instead of overflowing into March. */
+export function latestCandidateDate(created: number, zone=DEFAULT_TIME_ZONE): string {
+  const [year,month,day]=zonedDate(created,zone).split('-').map(Number);
+  const target=new Date(Date.UTC(year,month-1+CANDIDATE_MONTHS,1));
+  const last=new Date(Date.UTC(target.getUTCFullYear(),target.getUTCMonth()+1,0)).getUTCDate();
+  return `${target.getUTCFullYear()}-${String(target.getUTCMonth()+1).padStart(2,'0')}-${String(Math.min(day,last)).padStart(2,'0')}`;
+}
+export function isSelectableCandidateDate(date: string, created: number, now=created, zone=DEFAULT_TIME_ZONE): boolean {
+  return date>=zonedDate(now,zone)&&date<=latestCandidateDate(created,zone)&&isStableDay(date,zone);
+}
 export const timeLabel = (slot: number) => `${String(Math.floor(slot / 2)).padStart(2,'0')}:${slot % 2 ? '30' : '00'}`;
 export const jstDate = (at = Date.now()) => new Date(at + 9 * 3600000).toISOString().slice(0,10);
 export const dateEnd = (date: string, zone=DEFAULT_TIME_ZONE) => dayStart(nextDate(date),zone);
-export const expiration = (dates: Day[], created: number, zone=DEFAULT_TIME_ZONE) => Math.min(created + 30 * DAY_MS, Math.max(...dates.map(d => slotInstant(d,48,zone))));
+// Used only for new, validated candidates. Existing events keep their stored expiresAt.
+export const expiration = (dates: Day[], created: number, zone=DEFAULT_TIME_ZONE) => {
+  const latest=latestCandidateDate(created,zone);
+  if(!dates.length||dates.some(d=>d.date>latest))throw new Error('候補日は今日から保存期限内の重複しない日付を選んでください。');
+  return Math.max(...dates.map(d => slotInstant(d,48,zone)));
+};
 export function validateDays(input: unknown, created: number, now = Date.now(), zone=DEFAULT_TIME_ZONE): Day[] {
-  if (!Array.isArray(input) || !input.length || input.length > 30) throw new Error('候補日を1〜30日選んでください。');
+  if (!Array.isArray(input) || !input.length || input.length > MAX_CANDIDATE_DAYS) throw new Error('候補日を1〜30日選んでください。');
+  const latest=latestCandidateDate(created,zone);
   const seen = new Set<string>();
   return input.map((d: Day) => {
     if (!d || typeof d.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !Number.isFinite(Date.parse(d.date+'T00:00:00Z')) || new Date(d.date+'T00:00:00Z').toISOString().slice(0,10)!==d.date || d.date < zonedDate(now,zone) || seen.has(d.date)) throw new Error('候補日は今日から保存期限内の重複しない日付を選んでください。');
     if(!isStableDay(d.date,zone))throw new Error('候補日の時計が切り替わるため、この日付は選択できません。別の日付を選んでください。');
-    if(dateEnd(d.date,zone)>created+30*DAY_MS)throw new Error('候補日は今日から保存期限内の重複しない日付を選んでください。');
+    if(d.date>latest)throw new Error('候補日は今日から保存期限内の重複しない日付を選んでください。');
     seen.add(d.date);
     if (!Array.isArray(d.slots) || !d.slots.length || d.slots.some(s => !Number.isInteger(s) || s < 0 || s > 47)) throw new Error('候補時間を30分単位で選んでください。');
     return {date:d.date,slots:[...new Set(d.slots)].sort((a,b)=>a-b)};
