@@ -337,5 +337,6 @@
   "回数制限に達しました。約{0}秒後に再試行してください。入力内容は保持されています。": "Rate limit reached. Try again in about {0} seconds. Your input is preserved.",
   "作成要求を確認してください。": "Please check the creation request.",
   "作成内容が一致しません。": "The creation request does not match.",
-  "認証情報が変更されています。": "The credentials have changed."
+  "認証情報が変更されています。": "The credentials have changed.",
+  "Android版Firefoxで、uBlock Originを有効にすると作成時に通信エラーになるとの報告があります。作成できない場合は、このサイトだけuBlock Originを無効にして再試行してください。": "A user reported creation failing with a network error when uBlock Origin was enabled in Firefox for Android. If creation fails, disable uBlock Origin for this site only and try again."
 }
