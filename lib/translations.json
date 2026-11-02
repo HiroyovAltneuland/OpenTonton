@@ -338,5 +338,5 @@
   "作成要求を確認してください。": "Please check the creation request.",
   "作成内容が一致しません。": "The creation request does not match.",
   "認証情報が変更されています。": "The credentials have changed.",
-  "Android版Firefoxで、uBlock Originを有効にすると作成時に通信エラーになるとの報告があります。作成できない場合は、このサイトだけuBlock Originを無効にして再試行してください。再読み込みすると入力内容は消えるため、先に控えてください。": "A user reported creation failing with a network error when uBlock Origin was enabled in Firefox for Android. If creation fails, disable uBlock Origin for this site only and try again. Copy your entries before reloading, as reloading clears the form."
+  "Android版Firefoxで、uBlock Originを有効にすると作成時に通信エラーになるとの報告があります。作成できない場合は、このサイトだけuBlock Originを無効にして再試行してください。": "A user reported creation failing with a network error when uBlock Origin was enabled in Firefox for Android. If creation fails, disable uBlock Origin for this site only and try again."
 }
