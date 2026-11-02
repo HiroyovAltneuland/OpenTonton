@@ -14,6 +14,8 @@ export function translate(language: Language, message: string, values: Array<str
 export function translateError(language: Language, message: string): string {
   if (language === 'ja') return message;
   if (Object.hasOwn(english, message)) return english[message];
+  const retry=/^回数制限に達しました。約(\d+)秒後に再試行してください。入力内容は保持されています。$/.exec(message);
+  if(retry)return translate(language,'回数制限に達しました。約{0}秒後に再試行してください。入力内容は保持されています。',[retry[1]]);
   const max = /^入力内容を確認してください（最大(\d+)文字）。$/.exec(message);
   if (max) return translate(language, '入力内容を確認してください（最大{0}文字）。', [max[1]]);
   const code = /^処理できませんでした。エラーコード：(OT_[A-Z0-9_]+)$/.exec(message);
