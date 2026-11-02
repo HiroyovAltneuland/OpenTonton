@@ -17,6 +17,12 @@ try {
  const now=Date.now(),zone='Asia/Tokyo',latest=latestCandidateDate(now,zone);
  const proof={scheme:PASSWORD_SCHEME,salt:'a'.repeat(32),verifier:'b'.repeat(64)};
  const payload={title:'Retention integration',description:'Synthetic only',timeZone:zone,nickname:'owner',password:proof,duration:60,dates:[{date:latest,slots:[18,19]}],agreed:true};
+ const keyed={...payload,requestKey:'c'.repeat(32)};
+ const first=await call('','POST',keyed),retry=await call('','POST',keyed);
+ assert.equal(first.status,201);assert.equal(retry.status,201);assert.equal(first.data.id,retry.data.id);assert.equal(first.data.recovery,retry.data.recovery);
+ assert.equal((await call('','POST',{...keyed,title:'changed'})).status,409);
+ const concurrent=await Promise.all([call('','POST',{...payload,requestKey:'d'.repeat(32)}),call('','POST',{...payload,requestKey:'d'.repeat(32)})]);
+ assert.ok(concurrent.every(r=>r.status===201));assert.equal(concurrent[0].data.id,concurrent[1].data.id);
  assert.equal((await call('','POST',{...payload,dates:[{date:nextDate(latest),slots:[18,19]}]})).status,400);
  const made=await call('','POST',payload);assert.equal(made.status,201,JSON.stringify(made.data));const id=made.data.id;
  const snapshot=(await call('/'+id)).data;

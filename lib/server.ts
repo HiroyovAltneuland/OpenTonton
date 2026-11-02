@@ -122,11 +122,25 @@ export async function api(request:Request):Promise<Response>{
     }
     if(parts[0]!=='events')fail(404,'ページが見つかりません。');
     if(parts.length===1&&method==='POST'){
+      const data=await body(request);agree(data);
+      const requestKey=data.requestKey;
+      if(requestKey!==undefined&&(typeof requestKey!=='string'||!/^[a-f0-9]{32}$/.test(requestKey)))fail(400,'作成要求を確認してください。');
+      const fingerprint=requestKey?await hash(JSON.stringify(data)):null;
+      const eventId=requestKey?(await hash('create-event:'+requestKey)).slice(0,32):id();
+      const recovery=requestKey?(await hash('create-recovery:'+requestKey)).slice(0,32):id();
+      const replay=await db().prepare('SELECT * FROM events WHERE id=?').bind(eventId).first<any>();
+      if(replay){
+        if(!fingerprint||replay.creation_fingerprint!==fingerprint)fail(409,'作成内容が一致しません。');
+        if(replay.expires_at<=Date.now())fail(410,'保存期限を過ぎています。');
+        const owner=await db().prepare("SELECT * FROM members WHERE event_id=? AND role='owner'").bind(eventId).first<any>();
+        if(!owner||!await verifyPassword(data.password,owner.password))fail(409,'認証情報が変更されています。');
+        return json({id:eventId,recovery},201,{'Set-Cookie':await issueSession(request,parseEvent(replay),owner)});
+      }
       await creationQuota(request);
       const total=await db().prepare('SELECT COUNT(*) AS n FROM events').first<{n:number}>();if((total?.n||0)>=5000)fail(503,'現在、新規作成を受け付けていません。');
-      const data=await body(request);agree(data);const now=Date.now();
+      const now=Date.now();
       const timeZone=canonicalTimeZone(data.timeZone);
-      const days=validateDays(data.dates,now,now,timeZone).map(d=>({...d,startAt:slotInstant(d.date,0,timeZone)}));const eventId=id();const memberId=id();const nickname=canonicalNickname(data.nickname);const recovery=id();
+      const days=validateDays(data.dates,now,now,timeZone).map(d=>({...d,startAt:slotInstant(d.date,0,timeZone)}));const memberId=requestKey?(await hash('create-owner:'+requestKey)).slice(0,32):id();const nickname=canonicalNickname(data.nickname);
       const event:EventData={id:eventId,timeZone,title:text(data.title,80,true),description:text(data.description,500),dates:days,duration:duration(data.duration),createdAt:now,expiresAt:expiration(days,now,timeZone),status:'open',confirmed:null,revision:1};
       if(!days.some(d=>d.slots.some(start=>Array.from({length:event.duration/30},(_,i)=>start+i).every(s=>d.slots.includes(s)))))fail(400,'開催時間を満たす連続した候補時間帯を設定してください。');
       const pass=await passwordHash(data.password);
@@ -136,12 +150,13 @@ export async function api(request:Request):Promise<Response>{
       const quota=await creationQuota(request);
       const token=id()+id();const sessionExpires=Math.min(Date.now()+7*86400000,event.expiresAt);
       const result=await db().batch([
-        db().prepare('INSERT INTO events(id,time_zone,title,description,dates,duration,created_at,expires_at,status,revision,terms_version) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT count FROM rate_limits WHERE key=?),0)<20').bind(eventId,timeZone,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION,quota.key),
-        db().prepare('INSERT INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(memberId,eventId,nickname,'owner',pass,await hash(recovery),'{}',1,now,now,eventId),
-        db().prepare('INSERT INTO sessions(token,member_id,expires_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?)').bind(await hash(token),memberId,sessionExpires,eventId),
-        db().prepare('INSERT INTO rate_limits(key,count,expires_at) SELECT ?,1,? WHERE EXISTS(SELECT 1 FROM events WHERE id=?) ON CONFLICT(key) DO UPDATE SET count=count+1').bind(quota.key,quota.expires,eventId),
+        db().prepare('INSERT OR IGNORE INTO events(id,time_zone,title,description,dates,duration,created_at,expires_at,status,revision,terms_version,creation_fingerprint) SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT count FROM rate_limits WHERE key=?),0)<20').bind(eventId,timeZone,event.title,event.description,JSON.stringify(days),event.duration,now,event.expiresAt,'open',1,VERSION,fingerprint,quota.key),
+        db().prepare('INSERT INTO rate_limits(key,count,expires_at) SELECT ?,1,? WHERE changes()=1 ON CONFLICT(key) DO UPDATE SET count=count+1').bind(quota.key,quota.expires),
+        db().prepare('INSERT OR IGNORE INTO members(id,event_id,nickname,role,password,recovery,availability,version,created_at,agreed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=? AND creation_fingerprint IS ?)').bind(memberId,eventId,nickname,'owner',pass,await hash(recovery),'{}',1,now,now,eventId,fingerprint),
+        db().prepare('INSERT INTO sessions(token,member_id,expires_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM events WHERE id=? AND creation_fingerprint IS ?)').bind(await hash(token),memberId,sessionExpires,eventId,fingerprint),
+
       ]);
-      if(!result[0].meta.changes)rateExceeded(quota.expires,creationLimitMessage);
+      if(!result[0].meta.changes){const existing=await db().prepare('SELECT creation_fingerprint FROM events WHERE id=?').bind(eventId).first<any>();if(!existing)rateExceeded(quota.expires,creationLimitMessage);if(existing.creation_fingerprint!==fingerprint)fail(409,'作成内容が一致しません。');}
       return json({id:eventId,recovery},201,{'Set-Cookie':cookie(request,event.id,token,sessionExpires)});
     }
     const eventId=parts[1];const event=await activeEvent(eventId);const action=parts[2];
