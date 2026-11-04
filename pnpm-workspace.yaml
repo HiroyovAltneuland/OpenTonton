@@ -1,5 +1,5 @@
-# Copied Sites are standalone projects and cannot inherit the monorepo policy.
-minimumReleaseAge: 10080
+# pnpm 11 default: wait one day before resolving newly published versions.
+minimumReleaseAge: 1440
 minimumReleaseAgeIgnoreMissingTime: false
 trustLockfile: false
 strictDepBuilds: true
