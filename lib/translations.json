@@ -354,5 +354,7 @@
   "早い時間へ": "Earlier times",
   "遅い時間へ": "Later times",
   "参加できる時間をバーで選択してください。": "Select your available times using the bars.",
-  "候補時間が未選択の日があります。時間を選ぶか、カレンダーで日付を外してください。": "Some days have no candidate times. Select times or remove the dates from the calendar."
+  "候補時間が未選択の日があります。時間を選ぶか、カレンダーで日付を外してください。": "Some days have no candidate times. Select times or remove the dates from the calendar.",
+  "URLを共有して、回答を集める": "Share the URL and collect availability",
+  "参加者は自分のニックネームとパスワードを設定し、参加できる時間をバーで選びます。30分単位でタップ・なぞって変更でき、選んだ時間は緑で表示されます。その日の候補に参加できない場合は「参加不可」を選べます。": "Participants choose a nickname and password, then select available times on the timeline. Tap or drag to change half-hour slots; selected times turn green. Choose Unavailable if none of that event date’s candidates work."
 }
