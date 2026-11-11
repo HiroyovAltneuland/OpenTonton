@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -27,6 +28,28 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || 'google-chrome' });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: 'ja-JP' });
   await page.goto(url);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const timeline = page.locator('.day-card .timeline').first();
+    await timeline.locator('.answer-band').first().waitFor({ state: 'attached' });
+    const bands = await timeline.evaluate(table => {
+      const joined = table.querySelector('.answer-slot.available + .answer-slot.available');
+      const first = joined?.previousElementSibling?.querySelector('.answer-band');
+      const second = joined?.querySelector('.answer-band');
+      const gap = table.querySelector('.answer-slot.available + .answer-slot:not(.available)');
+      return {
+        distance: first && second
+          ? second.getBoundingClientRect().left - first.getBoundingClientRect().right
+          : null,
+        gapEndsBand: !!gap?.previousElementSibling?.querySelector('.band-end')
+          && !!gap && !gap.querySelector('.answer-band'),
+      };
+    });
+    assert.ok(bands.distance !== null && Math.abs(bands.distance) <= 1, 'Adjacent slots form one band');
+    assert.ok(bands.gapEndsBand, 'Unavailable slots break the band');
+    console.log(`Answer bands passed at ${width}px`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator('.new-event').click();
   await page.locator('.calendar-grid button:enabled').first().click();
 
