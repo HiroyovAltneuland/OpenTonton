@@ -47,6 +47,7 @@ try {
     });
     assert.ok(bands.distance !== null && Math.abs(bands.distance) <= 1, 'Adjacent slots form one band');
     assert.ok(bands.gapEndsBand, 'Unavailable slots break the band');
+    await timeline.locator("xpath=ancestor::article").screenshot({path: `preview/answer-bands-${width}.png`});
     console.log(`Answer bands passed at ${width}px`);
   }
   await page.setViewportSize({ width: 1280, height: 900 });

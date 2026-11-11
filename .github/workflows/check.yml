@@ -27,4 +27,8 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/opentonton-browser" --ignore-scripts --no-audit --no-fund --registry https://npm.flatt.tech/ playwright-core@1.62.1
           PLAYWRIGHT_CORE="$RUNNER_TEMP/opentonton-browser/node_modules/playwright-core" CHROME_BIN="$(command -v google-chrome)" node tests/timeline.browser.mjs
-      - run: pnpm test:integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: answer-timeline-preview
+          path: preview/*.png
+          retention-days: 7
