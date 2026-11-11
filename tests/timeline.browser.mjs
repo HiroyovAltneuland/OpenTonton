@@ -47,7 +47,23 @@ try {
     });
     assert.ok(bands.distance !== null && Math.abs(bands.distance) <= 1, 'Adjacent slots form one band');
     assert.ok(bands.gapEndsBand, 'Unavailable slots break the band');
-    console.log(`Answer bands passed at ${width}px`);
+    const columnColors = await timeline.evaluate(table => {
+      const cells = Array.from(table.querySelectorAll('.count-row td'));
+      const row = table.querySelector('tr:has(.answer-slot)');
+      return ['overlap-some', 'overlap-majority', 'all'].map(shade => {
+        const index = cells.findIndex(cell => cell.classList.contains(shade));
+        const answer = row?.cells[index + 1];
+        return index >= 0 && answer
+          ? [getComputedStyle(cells[index]).backgroundColor, getComputedStyle(answer).backgroundColor]
+          : [];
+      });
+    });
+    assert.deepEqual(columnColors, [
+      ['rgb(240, 247, 243)', 'rgb(240, 247, 243)'],
+      ['rgb(220, 238, 228)', 'rgb(220, 238, 228)'],
+      ['rgb(185, 222, 202)', 'rgb(185, 222, 202)'],
+    ]);
+    console.log(`Answer bands and overlap shading passed at ${width}px`);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator('.new-event').click();

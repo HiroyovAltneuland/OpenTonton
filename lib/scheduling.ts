@@ -60,3 +60,10 @@ export function canonicalNickname(input: unknown) {
   if (!name || name.length>24 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new Error('ニックネームは1〜24文字で入力してください。');
   return name;
 }
+
+/** Shade candidate slots by the share of participants who can attend. */
+export function availabilityShade(available: number, participants: number) {
+  if (available === 0) return '';
+  if (available === participants) return 'overlap-all';
+  return available * 2 > participants ? 'overlap-majority' : 'overlap-some';
+}
