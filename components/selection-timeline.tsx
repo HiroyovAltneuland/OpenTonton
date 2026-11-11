@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import { Eraser, Undo2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eraser, Undo2, X } from 'lucide-react';
 import { useLanguage } from './language-provider';
 import { useClock } from './time-display-provider';
 import type { Availability, Day } from '../lib/scheduling';
@@ -10,6 +10,7 @@ import { contiguousRanges, paintSlots } from '../lib/slot-selection';
 export function SelectionTimeline({days,value,onChange,participant=false}:{days:Day[];value:Availability;onChange:(value:Availability)=>void;participant?:boolean}) {
  const {t,dateFormat}=useLanguage();const clock=useClock();
  const scroller=useRef<HTMLDivElement>(null);const dialog=useRef<HTMLDialogElement>(null);
+ const [scrollEdges,setScrollEdges]=useState({atStart:true,atEnd:true});
  const [details,setDetails]=useState<string|null>(null);const [history,setHistory]=useState<Record<string,(number[]|undefined)[]>>({});
  const latest=useRef(value);
  useEffect(()=>{
@@ -24,6 +25,30 @@ export function SelectionTimeline({days,value,onChange,participant=false}:{days:
  const suppressClick=useRef(false);
  const signature=days.map(d=>d.date).join(',');
  useEffect(()=>{const el=scroller.current;if(!el)return;const first=Math.min(...days.flatMap(d=>value[d.date]?.length?value[d.date]:d.slots));const slot=el.querySelector<HTMLElement>('.selection-slot');if(slot&&Number.isFinite(first))el.scrollLeft=Math.max(0,first-2)*slot.getBoundingClientRect().width;},[signature]); // Do not jump while painting or changing display zone.
+ useEffect(()=>{
+  const el=scroller.current;
+  if(!el)return;
+  function updateEdges(){
+   if(!el)return;
+   const {scrollLeft,scrollWidth,clientWidth}=el;
+   // The scroll position can be fractional, while the widths are rounded.
+   const atStart=scrollLeft<=1;
+   const atEnd=scrollWidth-clientWidth-scrollLeft<=1;
+   setScrollEdges(previous=>previous.atStart===atStart&&previous.atEnd===atEnd
+    ?previous
+    :{atStart,atEnd});
+  }
+  const observer=new ResizeObserver(updateEdges);
+  observer.observe(el);
+  const table=el.querySelector('.selection-table');
+  if(table)observer.observe(table);
+  el.addEventListener('scroll',updateEdges,{passive:true});
+  updateEdges();
+  return ()=>{
+   observer.disconnect();
+   el.removeEventListener('scroll',updateEdges);
+  };
+ },[]);
  useEffect(()=>{if(details)dialog.current?.showModal();},[details]);
  function remember(date:string,before:Availability){setHistory(h=>({...h,[date]:[...(h[date]||[]).slice(-19),before[date]]}));}
  function change(date:string,slots:number[]|undefined){const next={...latest.current};if(slots===undefined)delete next[date];else next[date]=slots;latest.current=next;onChange(next);}
@@ -32,7 +57,14 @@ export function SelectionTimeline({days,value,onChange,participant=false}:{days:
  function end(e:PointerEvent<HTMLButtonElement>,cancel=false){const d=drag.current;if(!d||d.pointer!==e.pointerId)return;if(d.moved){suppressClick.current=true;if(cancel){onChange(d.before);latest.current=d.before;setHistory(h=>({...h,[d.date]:(h[d.date]||[]).slice(0,-1)}));}}drag.current=null;}
  return <div className={'selection-editor'+(participant?' participant-selection':'')}>
  <p className="field-hint">{t("タップで選択・解除。なぞってまとめて変更できます。横にスクロールすると別の時間が見られます。")}</p>
- <div className="selection-navigation"><button type="button" className="secondary" onClick={()=>scroller.current?.scrollBy({left:-228,behavior:'smooth'})}>{t("早い時間へ")}</button><button type="button" className="secondary" onClick={()=>scroller.current?.scrollBy({left:228,behavior:'smooth'})}>{t("遅い時間へ")}</button></div>
+ <div className="selection-navigation">
+  <button type="button" className="secondary" aria-label={t("早い時間へ")} title={t("早い時間へ")} disabled={scrollEdges.atStart} onClick={()=>scroller.current?.scrollBy({left:-228,behavior:'smooth'})}>
+   <ChevronLeft size={24} aria-hidden="true"/>
+  </button>
+  <button type="button" className="secondary" aria-label={t("遅い時間へ")} title={t("遅い時間へ")} disabled={scrollEdges.atEnd} onClick={()=>scroller.current?.scrollBy({left:228,behavior:'smooth'})}>
+   <ChevronRight size={24} aria-hidden="true"/>
+  </button>
+ </div>
  <div className="selection-scroller" ref={scroller}><table className="selection-table"><caption className="sr-only">{t("30分単位の時間選択")}</caption><colgroup><col style={{width:"var(--selection-date)"}}/><col style={{width:"calc(var(--selection-slot)*48)"}}/></colgroup><tbody>{days.map(day=>{
  const slots=value[day.date]||[];const ranges=contiguousRanges(slots);const label=dateFormat(day.date,{month:'numeric',day:'numeric',weekday:'short'});
  return <tr key={day.date}><th scope="row" className="selection-date"><strong>{label}</strong><div className="selection-tools"><button type="button" title={t("この日の選択を解除")} aria-label={label+' '+t("この日の選択を解除")} disabled={!slots.length} onClick={()=>{remember(day.date,value);change(day.date,[]);}}><Eraser size={19}/></button><button type="button" title={t("この日の変更を戻す")} aria-label={label+' '+t("この日の変更を戻す")} disabled={!history[day.date]?.length} onClick={()=>{const h=history[day.date];change(day.date,h[h.length-1]);setHistory(all=>({...all,[day.date]:h.slice(0,-1)}));}}><Undo2 size={19}/></button></div><button type="button" className="selection-summary" disabled={!ranges.length} aria-label={label+' '+t("選択時間の詳細")} onClick={()=>setDetails(day.date)}>{ranges.length>1?t("{0}区間",[ranges.length]):ranges.length?clock.time(day.date,ranges[0][0])+'–'+clock.time(day.date,ranges[0][1]):t("未選択")}</button>{participant&&<label className="selection-unavailable"><input type="checkbox" checked={Object.hasOwn(value,day.date)&&!slots.length} onChange={e=>{remember(day.date,value);change(day.date,e.target.checked?[]:undefined);}}/>{t("参加不可")}</label>}</th><td><div className="selection-hours">{Array.from({length:24},(_,h)=><span key={h} title={clock.full(day.date,h*2)}>{clock.time(day.date,h*2)}{clock.displayZone!==clock.eventZone&&(h===0||clock.header(day.date,h*2)!==clock.header(day.date,(h-1)*2))&&<small>{clock.header(day.date,h*2)}</small>}</span>)}</div><div className="selection-band">{Array.from({length:48},(_,s)=><button type="button" key={s} data-selection-slot={s} data-date={day.date} className={'selection-slot'+(slots.includes(s)?' selected':'')+(!day.slots.includes(s)?' outside':'')} disabled={!day.slots.includes(s)} aria-label={clock.range(day.date,s,s+1)} aria-pressed={slots.includes(s)} onPointerDown={e=>down(e,day,s)} onPointerMove={move} onPointerUp={e=>end(e)} onPointerCancel={e=>end(e,true)} onClick={()=>{if(suppressClick.current){suppressClick.current=false;return;}remember(day.date,value);change(day.date,paintSlots(slots,day.slots,s,s,!slots.includes(s)));}}/> )}</div></td></tr>;
