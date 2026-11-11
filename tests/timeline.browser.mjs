@@ -26,7 +26,7 @@ let browser;
 try {
   await waitForServer();
   browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || 'google-chrome' });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: 'ja-JP' });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: 'en-US' });
   await page.goto(url);
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -47,10 +47,11 @@ try {
     });
     assert.ok(bands.distance !== null && Math.abs(bands.distance) <= 1, 'Adjacent slots form one band');
     assert.ok(bands.gapEndsBand, 'Unavailable slots break the band');
-    await timeline.locator("xpath=ancestor::article").screenshot({path: `preview/answer-bands-${width}.png`});
+    await timeline.locator("xpath=ancestor::article").screenshot({animations: "disabled", path: `preview/answer-bands-${width}.png`});
     console.log(`Answer bands passed at ${width}px`);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("combobox", { name: "Language / 言語" }).selectOption({ label: "日本語" });
   await page.locator('.new-event').click();
   await page.locator('.calendar-grid button:enabled').first().click();
 
