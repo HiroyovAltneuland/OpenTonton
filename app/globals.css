@@ -68,3 +68,9 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 @media(max-width:600px){.selection-editor{--selection-date:112px;--selection-slot:19px}.selection-date{font-size:1rem;padding:8px!important}.selection-hours>span{font-size:.875rem}.selection-summary{font-size:.75rem}.create-flow{gap:22px}.selection-details{width:calc(100vw - 24px)}}
 
 .selection-hours small{position:relative;z-index:1;width:max-content;background:#fff}.selection-editor .field-hint{margin:10px 0}
+
+/* Keep the half-hour cells while joining adjacent available slots visually. */
+.timeline .answer-band{position:absolute;top:50%;transform:translateY(-50%);left:0;right:-1px;height:20px;background:#237653;pointer-events:none}
+.timeline .answer-band.band-start{left:2px;border-radius:5px 0 0 5px}
+.timeline .answer-band.band-end{right:2px;border-top-right-radius:5px;border-bottom-right-radius:5px}
+.legend-dot.green{background:#237653;width:18px;height:8px;border-radius:4px}
