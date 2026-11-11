@@ -74,3 +74,12 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 .timeline .answer-band.band-start{left:2px;border-radius:5px 0 0 5px}
 .timeline .answer-band.band-end{right:2px;border-top-right-radius:5px;border-bottom-right-radius:5px}
 .legend-dot.green{background:#237653;width:18px;height:8px;border-radius:4px}
+
+/* Column shading shows attendance; the darker bands remain individual answers. */
+.timeline{--overlap-some:#f0f7f3;--overlap-majority:#dceee4;--overlap-all:#b9deca;--overlap-hour:#cce7d8}
+.timeline .answer-slot.overlap-some,.timeline .count-slot.overlap-some{background:var(--overlap-some)}
+.timeline .answer-slot.overlap-majority,.timeline .count-slot.overlap-majority{background:var(--overlap-majority)}
+.timeline .answer-slot.overlap-all,.timeline .count-slot.all{background:var(--overlap-all)}
+.timeline .hour[data-overlap-first]{background:linear-gradient(to right,var(--overlap-hour) 50%,#fff 50%)}
+.timeline .hour[data-overlap-second]{background:linear-gradient(to right,#fff 50%,var(--overlap-hour) 50%)}
+.timeline .hour[data-overlap-first][data-overlap-second]{background:var(--overlap-hour)}
