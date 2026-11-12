@@ -144,6 +144,11 @@ try {
       assert.equal(await page.locator(`[data-date="${nextDay}"][data-selection-slot="18"]:disabled`).count(), 1);
     }
     for (const slot of await slots.all()) await slot.click();
+    if (['one hour', 'morning and evening', 'midnight'].includes(label)) {
+      await page.locator('.participant-selection').screenshot({
+        animations: 'disabled', path: 'preview/' + label.replaceAll(' ', '-') + '.png',
+      });
+    }
     if (expectedRange) {
       await toggle.click();
       assert.equal(await gaps.count(), 0);

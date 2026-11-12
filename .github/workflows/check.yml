@@ -23,8 +23,14 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Install Japanese screenshot fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y fonts-noto-cjk
       - name: Check timeline in Chrome
         run: |
           npm install --prefix "$RUNNER_TEMP/opentonton-browser" --ignore-scripts --no-audit --no-fund --registry https://npm.flatt.tech/ playwright-core@1.62.1
           PLAYWRIGHT_CORE="$RUNNER_TEMP/opentonton-browser/node_modules/playwright-core" CHROME_BIN="$(command -v google-chrome)" node tests/timeline.browser.mjs
-      - run: pnpm test:integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compact-answer-timeline-previews
+          path: preview/*.png
+          retention-days: 7
