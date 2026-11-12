@@ -85,8 +85,7 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 .timeline .hour[data-overlap-first][data-overlap-second]{background:var(--overlap-hour)}
 
 .selection-navigation .selection-view-toggle{width:auto;padding:0 10px}
-.compact-selection .selection-table{min-width:calc(var(--selection-date) + 104px)}
-.compact-selection .selection-window{font-size:.875rem;padding:4px 3px;color:#4e5d72}
+.compact-selection .selection-window{white-space:nowrap;font-size:.875rem;padding:4px 3px;color:#4e5d72}
 .compact-selection .selection-hours>span{white-space:nowrap}
 
 .selection-editor{--selection-gap:100px}
