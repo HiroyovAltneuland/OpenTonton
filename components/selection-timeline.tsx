@@ -50,7 +50,8 @@ export function SelectionTimeline({days,value,onChange,participant=false}:{days:
  const ticks=columns.filter((column,index)=>column.gap||column.start%2===0||index===0||columns[index-1].gap);
  const slotCount=columns.filter(column=>!column.gap).length;
  const gapCount=columns.length-slotCount;
- const timeWidth=`calc(var(--selection-slot)*${slotCount} + var(--selection-gap)*${gapCount})`;
+ const columnsWidth=`calc(var(--selection-slot)*${slotCount} + var(--selection-gap)*${gapCount})`;
+ const timeWidth=compact?`max(104px, ${columnsWidth})`:columnsWidth;
  const signature=days.map(d=>d.date).join(',');
  useEffect(()=>{const el=scroller.current;if(!el)return;if(compact){el.scrollLeft=0;return;}const first=Math.min(...days.flatMap(d=>value[d.date]?.length?value[d.date]:d.slots));const slot=el.querySelector<HTMLElement>('.selection-slot');if(slot&&Number.isFinite(first))el.scrollLeft=Math.max(0,first-2)*slot.getBoundingClientRect().width;},[signature,compact,start,finish]); // Do not jump while painting or changing display zone.
  useEffect(()=>{
