@@ -92,11 +92,13 @@ try {
   // Exercise the real answer editor with small, deterministic event snapshots.
   const day = '2030-01-01';
   const nextDay = '2030-01-02';
-  for (const [label, dates, expectedRange, expectedEnabled] of [
+  for (const [label, dates, expectedRange, expectedEnabled, expectedGap] of [
     ['one hour', [{ date: day, slots: [32, 33] }], '16:00–17:00', [32, 33]],
     ['last half hour', [{ date: day, slots: [47] }], '23:30–24:00', [47]],
     ['gap and shared axis', [{ date: day, slots: [18, 19, 36, 37] }, { date: nextDay, slots: [28] }], '09:00–19:00', [18, 19, 36, 37, 28]],
-    ['midnight', [{ date: day, slots: [46, 47] }, { date: nextDay, slots: [0, 1] }], null, [46, 47, 0, 1]],
+    ['just below threshold', [{ date: day, slots: [18, 19, 35, 36] }], '09:00–18:30', [18, 19, 35, 36]],
+    ['morning and evening', [{ date: day, slots: [18, 19, 36, 37] }], '09:00–19:00', [18, 19, 36, 37], [20, 36]],
+    ['midnight', [{ date: day, slots: [46, 47] }, { date: nextDay, slots: [0, 1] }], '00:00–24:00', [46, 47, 0, 1], [2, 46]],
   ]) {
     const id = 'browser-test';
     const participant = { id: 'guest', nickname: 'Guest', role: 'participant', availability: {}, version: 1 };
@@ -124,7 +126,15 @@ try {
     } else {
       assert.equal(await toggle.count(), 0, 'A full-width candidate range already shows 24 hours');
     }
-    if (label === 'one hour' || label === 'last half hour') {
+    const gaps = page.locator('.selection-gap-band');
+    if (expectedGap) {
+      assert.deepEqual(await gaps.evaluateAll(nodes => nodes.map(node =>
+        [Number(node.dataset.gapStart), Number(node.dataset.gapEnd)])),
+        dates.map(() => expectedGap));
+    } else {
+      assert.equal(await gaps.count(), 0);
+    }
+    if (label === 'one hour' || label === 'last half hour' || expectedGap) {
       const fits = await page.locator('.participant-selection .selection-scroller')
         .evaluate(node => node.scrollWidth <= node.clientWidth + 1);
       assert.ok(fits, 'Short ranges fit at 390px');
@@ -136,6 +146,7 @@ try {
     for (const slot of await slots.all()) await slot.click();
     if (expectedRange) {
       await toggle.click();
+      assert.equal(await gaps.count(), 0);
       assert.equal(await page.locator('.participant-selection [data-selection-slot]').count(), dates.length * 48);
       await page.getByRole('button', { name: '候補範囲を表示', exact: true }).click();
     }
