@@ -34,9 +34,10 @@ try {
  const noOwner=await call('','POST',{title:'Invalid owner',nickname:'',autoNickname:true,password:proof,duration:60,dates:[{date,slots:[18,19]}],agreed:true});assert.equal(noOwner.status,400);
  const tomorrow=nextDate(date);
  const overnightDates=[{date,slots:[46,47]},{date:tomorrow,slots:[0,1]}];
- const overnightPayload={title:'Midnight test',nickname:'owner',password:proof,duration:60,dates:overnightDates,agreed:true};
+ const overnightPayload={title:'Midnight test',description:'Synthetic',nickname:'owner',password:proof,duration:60,dates:overnightDates,agreed:true};
  const tooLong=await call('','POST',{...overnightPayload,duration:120});
  assert.equal(tooLong.status,400,JSON.stringify(tooLong.data));
+ assert.match(tooLong.data.error,/連続した候補時間帯/);
  const overnight=await call('','POST',overnightPayload);
  assert.equal(overnight.status,201,JSON.stringify(overnight.data));
  const overnightId=overnight.data.id;
