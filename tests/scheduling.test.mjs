@@ -17,3 +17,17 @@ test('timeline shading reserves its strongest color for all participants', () =>
   assert.equal(availabilityShade(5, 6), 'overlap-majority');
   assert.equal(availabilityShade(6, 6), 'overlap-all');
 });
+
+test('late and early answers retain their event dates and are not joined into a recommendation', () => {
+  const date = '2026-10-29';
+  const next = '2026-10-30';
+  const dates = [{ date, slots: [46, 47] }, { date: next, slots: [0, 1] }];
+  const availability = { [date]: [46, 47], [next]: [0, 1] };
+  assert.deepEqual(validateAvailability(availability, dates), availability);
+  const members = [{ role: 'participant', availability }];
+  assert.deepEqual(recommendations({ dates, duration: 120 }, members), []);
+  assert.deepEqual(recommendations({ dates, duration: 60 }, members), [
+    { date, start: 46, end: 48, count: 1 },
+    { date: next, start: 0, end: 2, count: 1 },
+  ]);
+});

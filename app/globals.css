@@ -83,3 +83,13 @@ button,input,textarea,select{max-width:100%}.event-heading>div,.day-title,.event
 .timeline .hour[data-overlap-first]{background:linear-gradient(to right,var(--overlap-hour) 50%,#fff 50%)}
 .timeline .hour[data-overlap-second]{background:linear-gradient(to right,#fff 50%,var(--overlap-hour) 50%)}
 .timeline .hour[data-overlap-first][data-overlap-second]{background:var(--overlap-hour)}
+
+.selection-navigation .selection-view-toggle{width:auto;padding:0 10px}
+.compact-selection .selection-window{white-space:nowrap;font-size:.875rem;padding:4px 3px;color:#4e5d72}
+.compact-selection .selection-hours>span{white-space:nowrap}
+
+.selection-editor{--selection-gap:100px}
+.selection-hours>.selection-gap-heading,.selection-gap-band{width:var(--selection-gap);flex:none;border-inline:1px dashed #b0bdcd;background:#edf1f6}
+.selection-hours>.selection-gap-heading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0;line-height:1.3;font-size:.8125rem}
+.selection-gap-heading>small{background:transparent;color:#42566f;font-size:.75rem;line-height:1.35}
+.selection-gap-band{background:repeating-linear-gradient(135deg,#f2f5f8,#f2f5f8 5px,#e3e9f0 5px,#e3e9f0 6px)}
