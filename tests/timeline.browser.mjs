@@ -89,6 +89,69 @@ try {
     await later.and(page.locator(':enabled')).waitFor();
     console.log(`Timeline arrows passed at ${width}px`);
   }
+  // Exercise the real answer editor with small, deterministic event snapshots.
+  const day = '2030-01-01';
+  const nextDay = '2030-01-02';
+  for (const [label, dates, expectedRange, expectedEnabled] of [
+    ['one hour', [{ date: day, slots: [32, 33] }], '16:00–17:00', [32, 33]],
+    ['last half hour', [{ date: day, slots: [47] }], '23:30–24:00', [47]],
+    ['gap and shared axis', [{ date: day, slots: [18, 19, 36, 37] }, { date: nextDay, slots: [28] }], '09:00–19:00', [18, 19, 36, 37, 28]],
+    ['midnight', [{ date: day, slots: [46, 47] }, { date: nextDay, slots: [0, 1] }], null, [46, 47, 0, 1]],
+  ]) {
+    const id = 'browser-test';
+    const participant = { id: 'guest', nickname: 'Guest', role: 'participant', availability: {}, version: 1 };
+    const event = { id, title: label, description: '', dates, duration: 60, timeZone: 'Asia/Tokyo',
+      status: 'open', createdAt: Date.now(), expiresAt: Date.parse('2030-01-03'), confirmed: null, revision: 1 };
+    const saved = Object.fromEntries(dates.map(date => [date.date, date.slots]));
+    await page.route('**/api/events/browser-test', route => route.fulfill({ json: {
+      event, members: [participant], me: participant,
+    } }));
+    await page.route('**/api/events/browser-test/answer', async route => {
+      assert.equal(route.request().method(), 'PATCH');
+      assert.deepEqual(route.request().postDataJSON().availability, saved);
+      participant.availability = saved;
+      await route.fulfill({ json: {} });
+    });
+    await page.goto(url + '?event=' + id);
+    const edit = page.getByRole('button', { name: '回答を編集', exact: true });
+    await page.getByRole('combobox', { name: '時刻の表示', exact: true }).selectOption('event');
+    await edit.click();
+    const slots = page.locator('.participant-selection [data-selection-slot]:enabled');
+    assert.deepEqual(await slots.evaluateAll(nodes => nodes.map(node => Number(node.dataset.selectionSlot))), expectedEnabled);
+    const toggle = page.getByRole('button', { name: '24時間表示', exact: true });
+    if (expectedRange) {
+      assert.equal(await page.locator('.selection-window').first().innerText(), expectedRange);
+    } else {
+      assert.equal(await toggle.count(), 0, 'A full-width candidate range already shows 24 hours');
+    }
+    if (label === 'one hour' || label === 'last half hour') {
+      const fits = await page.locator('.participant-selection .selection-scroller')
+        .evaluate(node => node.scrollWidth <= node.clientWidth + 1);
+      assert.ok(fits, 'Short ranges fit at 390px');
+    }
+    if (label === 'gap and shared axis') {
+      assert.equal(await page.locator(`[data-date="${day}"][data-selection-slot="28"]:disabled`).count(), 1);
+      assert.equal(await page.locator(`[data-date="${nextDay}"][data-selection-slot="18"]:disabled`).count(), 1);
+    }
+    for (const slot of await slots.all()) await slot.click();
+    if (expectedRange) {
+      await toggle.click();
+      assert.equal(await page.locator('.participant-selection [data-selection-slot]').count(), dates.length * 48);
+      await page.getByRole('button', { name: '候補範囲を表示', exact: true }).click();
+    }
+    await page.getByRole('combobox', { name: '時刻の表示', exact: true }).selectOption('custom');
+    await page.getByRole('combobox', { name: '表示のタイムゾーン', exact: true }).selectOption('UTC');
+    assert.equal(await slots.and(page.locator('[aria-pressed="true"]')).count(), expectedEnabled.length);
+    await page.getByRole('button', { name: '回答を保存', exact: true }).click();
+    await page.getByText('回答を保存しました', { exact: true }).waitFor();
+    assert.deepEqual(participant.availability, saved);
+    await page.reload();
+    await edit.click();
+    assert.equal(await slots.and(page.locator('[aria-pressed="true"]')).count(), expectedEnabled.length);
+    await page.unrouteAll({ behavior: 'wait' });
+    console.log(`Answer editor edge case passed: ${label}`);
+  }
+
 } finally {
   try {
     await browser?.close();

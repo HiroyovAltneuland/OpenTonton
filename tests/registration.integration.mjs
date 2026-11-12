@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import {RATE_LIMIT_BINDINGS} from '../lib/edge-rate-config.mjs';
 import {PASSWORD_SCHEME} from '../lib/password-client.ts';
-import {dayStart,isStableDay,slotInstant,zonedDate} from '../lib/time-zone.ts';
+import {dayStart,isStableDay,nextDate,slotInstant,zonedDate} from '../lib/time-zone.ts';
 const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=await import(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
 const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:resolve('dist/server/index.js')},...readdirSync('dist/server',{recursive:true}).filter(p=>p.endsWith('.js')&&p!=='index.js').map(p=>({type:'ESModule',path:resolve('dist/server',p)}))],modulesRoot:resolve('dist/server'),compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],ratelimits:Object.fromEntries(RATE_LIMIT_BINDINGS.map(({name,...config})=>[name,config]))}));
@@ -32,5 +32,19 @@ try {
  const duplicate=await call('/'+id+'/join','POST',{...payload,autoNickname:false,nickname:'参加者10'});assert.equal(duplicate.status,409);
  const invalid=await call('/'+id+'/join','POST',{...payload,autoNickname:false,nickname:'   '});assert.equal(invalid.status,400);
  const noOwner=await call('','POST',{title:'Invalid owner',nickname:'',autoNickname:true,password:proof,duration:60,dates:[{date,slots:[18,19]}],agreed:true});assert.equal(noOwner.status,400);
+ const tomorrow=nextDate(date);
+ const overnightDates=[{date,slots:[46,47]},{date:tomorrow,slots:[0,1]}];
+ const overnightPayload={title:'Midnight test',nickname:'owner',password:proof,duration:60,dates:overnightDates,agreed:true};
+ const tooLong=await call('','POST',{...overnightPayload,duration:120});
+ assert.equal(tooLong.status,400,JSON.stringify(tooLong.data));
+ const overnight=await call('','POST',overnightPayload);
+ assert.equal(overnight.status,201,JSON.stringify(overnight.data));
+ const overnightId=overnight.data.id;
+ const overnightAvailability={[date]:[46,47],[tomorrow]:[0,1]};
+ const overnightAnswer=await call('/'+overnightId+'/join','POST',{...payload,nickname:'midnight guest',autoNickname:false,availability:overnightAvailability});
+ assert.equal(overnightAnswer.status,201,JSON.stringify(overnightAnswer.data));
+ const overnightRead=await call('/'+overnightId,'GET',undefined,overnightAnswer.cookie);
+ assert.equal(overnightRead.status,200);
+ assert.deepEqual(overnightRead.data.me.availability,overnightAvailability);
  console.log('PASS concurrent unique numbering, no reuse after deletion, manual collisions, English names, login and owner self-entry');
 } finally {await mf.dispose();}
