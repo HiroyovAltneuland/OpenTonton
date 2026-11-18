@@ -20,6 +20,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
+      - name: Test review safeguards
+        run: python3 -m unittest discover -s scripts/review -p 'test_*.py'
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
