@@ -1,0 +1,22 @@
+name: Gemini connection test (temporary)
+on:
+  push:
+    branches: [ci/gemini-pr-review]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/review -p 'test_*.py'
+      - name: Review PR 10
+        env:
+          PR_NUMBER: '10'
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/review/gemini_review.py
