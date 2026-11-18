@@ -43,3 +43,6 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Python review tooling
+__pycache__/

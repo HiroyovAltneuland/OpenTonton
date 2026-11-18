@@ -1,0 +1,32 @@
+name: Gemini PR review
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'レビュー対象のPR番号'
+        required: true
+        type: string
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: gemini-review-${{ inputs.pr_number }}
+  cancel-in-progress: false
+jobs:
+  review:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Test review safeguards
+        run: python3 -m unittest discover -s scripts/review -p 'test_*.py'
+      - name: Review public PR with Gemini
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/review/gemini_review.py
